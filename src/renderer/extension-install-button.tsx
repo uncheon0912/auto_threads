@@ -19,8 +19,8 @@ export function ExtensionInstallButton() {
   },[]);
   const installed=Boolean(status?.installed||status?.connected);
   return <>
-    <button className={`extension-install-button${installed?' installed':''}`} disabled={checking} onClick={()=>setOpen(true)} title="확장프로그램 설치 방법 및 업데이트 안내">
-      <span aria-hidden="true">{installed?'✓':'↧'}</span>{checking?'확장프로그램 확인 중…':installed?'확장프로그램 설치됨':'확장프로그램 설치'}
+    <button className={`extension-install-button${status?.connected?' installed':''}`} disabled={checking} onClick={()=>setOpen(true)} title="상품 수집기 연결 및 설치 안내">
+      <span aria-hidden="true">{status?.connected?'✓':'↧'}</span>{checking?'상품 수집기 확인 중…':status?.connected?'상품 수집 연결됨':installed?'상품 수집 연결 확인':'상품 수집 연결'}
     </button>
     {open&&<ExtensionInstallGuide status={status} onClose={()=>setOpen(false)}/>}
   </>;
@@ -44,8 +44,10 @@ export function ExtensionInstallGuide({status,onClose}:{status?:CoupangCollector
     try{await action();setNotice(message);}catch{setError('작업을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');}finally{setBusy(false);}
   };
   return createPortal(<div className="modal-backdrop extension-install-guide"><section ref={ref} className="modal" role="dialog" aria-modal="true" aria-labelledby="extension-install-title">
-    <header><div><h2 id="extension-install-title">Chrome 확장프로그램 설치</h2><p>설치 방법을 선택하세요. 현재 앱과 함께 제공된 버전은 개발자 모드로 설치할 수 있습니다.</p></div><button type="button" className="icon-button" aria-label="닫기" onClick={onClose}>×</button></header>
+    <header><div><h2 id="extension-install-title">상품 수집 연결</h2><p>Chrome에서 쿠팡·네이버 상품 정보와 이미지를 가져와 글 작성에 활용합니다.</p></div><button type="button" className="icon-button" aria-label="닫기" onClick={onClose}>×</button></header>
     <div className="modal-body stack">
+      <div className="collector-guide-intro"><div><span className="collector-guide-eyebrow">SHOPPING COLLECTOR</span><strong>연결하고, 수집하고, 글을 준비하세요.</strong><p>앱의 요청에 따라 상품 페이지를 확인합니다. Chrome과 이 앱을 함께 실행해 주세요.</p></div><span className={`collector-guide-state ${status?.connected?'connected':''}`}><i/>{status?.connected?'연결됨':status?.installed?'설치 확인 · 연결 필요':'연결 확인 필요'}</span></div>
+      <div className="collector-guide-flow" aria-label="상품 수집 연결 순서"><div><b>01</b><span>설치 방식 선택</span></div><div><b>02</b><span>Chrome에 설치</span></div><div><b>03</b><span>상품 자료 수집</span></div></div>
       <div className="extension-mode-options" role="group" aria-label="설치 방법">
         <button type="button" aria-pressed={mode==='developer'} onClick={()=>{setMode('developer');setNotice('');}}><strong>개발자 모드 설치 · 권장</strong><span>앱에 포함된 확장 파일로 바로 설치</span></button>
         <button type="button" aria-pressed={mode==='store'} onClick={()=>{setMode('store');setNotice('');}}><strong>웹스토어 설치</strong><span>스토어에 공개된 버전 설치</span></button>
@@ -58,7 +60,7 @@ export function ExtensionInstallGuide({status,onClose}:{status?:CoupangCollector
         <p>경로를 직접 입력할 때 Windows는 폴더 선택창의 주소 표시줄, macOS는 <strong>⌘⇧G</strong>(폴더로 이동)를 사용하세요.</p>
         <p>같은 확장이 웹스토어 버전으로 설치되어 있다면 먼저 제거한 뒤 진행하세요. 이후 앱을 업데이트하면 이 안내를 한 번 열고 Chrome 확장 관리 화면에서 해당 확장의 <strong>새로고침</strong>을 누르세요. 위 폴더는 삭제하거나 이동하지 마세요.</p>
       </>:<>
-        <p>스토어 심사·게시 일정에 따라 공개 버전이 앱에 포함된 버전보다 낮을 수 있습니다. 스토어의 버전을 확인하고, 낮으면 <strong>개발자 모드 설치</strong>를 선택하세요.</p>
+        <p>웹스토어에는 기존 이름과 아이콘이 표시될 수 있습니다. 스토어 심사·게시 일정에 따라 공개 버전이 앱에 포함된 버전보다 낮을 수 있습니다. 스토어의 버전을 확인하고, 낮으면 <strong>개발자 모드 설치</strong>를 선택하세요.</p>
         <ol className="extension-install-steps"><li>아래 버튼으로 스토어 페이지를 엽니다. 다른 브라우저에서 열리면 주소를 Chrome으로 복사하세요.</li><li>버전을 확인한 뒤 <strong>Chrome에 추가 → 확장 프로그램 추가</strong>를 누릅니다.</li><li>Chrome과 앱을 함께 실행하고 상품 페이지를 새로고침합니다.</li></ol>
         <p>개발자 모드 버전에서 전환한다면 기존 확장을 먼저 제거하세요.</p>
         <div className="actions"><button type="button" disabled={busy} onClick={()=>void act(()=>window.threadsAuto.coupangCollector.openStore(),'스토어 페이지를 열었습니다. Chrome에서 설치를 완료하세요.')}>웹스토어 열기</button></div>

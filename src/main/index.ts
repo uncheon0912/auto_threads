@@ -194,7 +194,7 @@ async function createApplication(): Promise<void> {
     title: safeUiTestMode ? '스레드 자동화 by @부자사람연구소 — UI 검증' : '스레드 자동화 by @부자사람연구소',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? {} : {
-      titleBarOverlay: { color: '#100D16', symbolColor: '#C9BED6', height: 40 },
+      titleBarOverlay: { color: '#0C1210', symbolColor: '#D9E7DF', height: 40 },
     }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -299,7 +299,18 @@ async function createApplication(): Promise<void> {
       await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-queue-item summary')?.click()`);
       await new Promise((resolve)=>setTimeout(resolve,500));
     }
-    await new Promise((resolve)=>setTimeout(resolve,800));
+    for (let attempt=0;attempt<20;attempt++) {
+      if (await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.app-shell'))")) break;
+      await new Promise((resolve)=>setTimeout(resolve,500));
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='workspace-settings') {
+      await mainWindow.webContents.executeJavaScript("document.querySelectorAll('.workspace-journey button')[1]?.click()");
+      await new Promise((resolve)=>setTimeout(resolve,300));
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='collector-guide') {
+      await mainWindow.webContents.executeJavaScript("document.querySelector('.extension-install-button')?.click()");
+      await new Promise((resolve)=>setTimeout(resolve,300));
+    }
     const screenshot=await mainWindow.webContents.capturePage();
     writeFileSync(uiScreenshotPath,screenshot.toPNG());
     console.log(`THREADS_AUTO_UI_SCREENSHOT=${uiScreenshotPath}`);

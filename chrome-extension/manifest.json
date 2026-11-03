@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Threads Auto - 쇼핑 상품 수집기",
+  "name": "부자사람연구소 - 상품 수집 연결",
   "version": "0.1.13",
-  "description": "Threads Auto가 요청한 쿠팡 및 네이버 브랜드 커넥트 상품의 이미지와 후기 근거를 현재 Chrome 세션에서 수집합니다.",
+  "description": "스레드 자동화에서 요청한 쿠팡·네이버 상품의 이미지와 후기 근거를 Chrome에서 수집합니다.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp5Io00cnUVtQcxF4FO27CJprZid6A/K9Rd1qbUF/qWr5Yi72KB78qDbudarg8r+ESs1B5xSbcp8oImTmgXSw2ZHbWYZ4RLl/7ia4o3rHXmkPXGvtwQucuaq/9D7zW8biBI2UTSs5bS9HhNYm5QuWegME+2F3A3dZ+x/rQkfiTqvpb53ndDHx6lzZSCGNG7+ndgCn2D5pjDc1lawnE0DbdsHVFnq4JaCdf6Bh+VrXUwKPnj7EA+PEOWbM/P12ZmdqG3nW3emfd/W+fTGrYkAujYQ1ejWBFKvAN80GgTyojYvopATGfaboZiCdGkQn+ZeNwztQokVAEoTPrcScH/8yQwIDAQAB",
   "permissions": [
     "nativeMessaging"

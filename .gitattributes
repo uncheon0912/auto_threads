@@ -1,0 +1,2 @@
+# Backups must be restored byte-for-byte, including SQLite and browser state.
+data/** -text

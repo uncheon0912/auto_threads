@@ -36,3 +36,5 @@ secrets.json
 *.key
 *.p12
 *.pfx
+/data.zip
+/ui-preview.png
