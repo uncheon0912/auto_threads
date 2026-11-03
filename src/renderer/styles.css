@@ -974,3 +974,59 @@ main { grid-column: 2; grid-row: 2; }
 .comment-settings select:disabled { opacity:.5; cursor:not-allowed; }
 
 .form-grid > .field > span:first-child { display:flex; align-items:center; min-height:22px; }
+
+/* 부자사람연구소 workspace theme */
+:root {
+  --primary: #168567; --primary-dark: #12664f; --primary-soft: #e1f3ec;
+  --focus: #218e70; --sidebar: #101714;
+}
+:root[data-theme="dark"] {
+  --bg: #0b0e0d; --surface: #141917; --surface-alt: #1b221f;
+  --surface-hover: #232d29; --sidebar: #090d0b;
+  --border: #303b36; --border-strong: #4a5a52;
+  --text: #f1f6f3; --muted: #aab9b1; --subtle: #aab9b1;
+  --primary: #70dfb1; --primary-dark: #70dfb1; --primary-soft: #1b352b;
+  --success: #6ce1a8; --success-soft: #183629;
+  --warning: #f2bf64; --warning-soft: #342a1a;
+  --danger: #fb8c91; --danger-soft: #3b2022;
+  --info: #79c6e9; --info-soft: #192f39; --focus: #90f0c7;
+}
+.app-shell { background: var(--bg); }
+.titlebar { background: #0c1210; color: #f1f6f3; border-bottom-color: #28332e; }
+.titlebar img { width: 24px; height: 24px; }
+.titlebar span { color: #aab9b1; }
+.titlebar .extension-install-button { background: #1b604b; border-color: #408b6e; color: #f1fff8; }
+.titlebar .extension-install-button:hover:not(:disabled) { background: #28775c; }
+.sidebar { background: var(--sidebar); border-right: 1px solid #29332e; }
+.sidebar nav { padding: 18px 12px; gap: 7px; }
+.sidebar nav button, .theme-toggle { color: #aab9b1; border-radius: 9px; }
+.sidebar nav button.active { background: #19382c; color: #e9fff3; box-shadow: inset 3px 0 #70dfb1; }
+.nav-icon { color: #82cbb0; }
+.primary { color: #082219; background: #70dfb1; box-shadow: none; }
+.primary:hover { color: #082219; background: #9aebc8; box-shadow: 0 7px 20px #0003; }
+:root:not([data-theme="dark"]) .primary { color: #fff; background: #167557; }
+:root:not([data-theme="dark"]) .primary:hover { background: #105b43; }
+.statusbar { background: var(--surface); }
+.page-header { padding-top: 26px; }
+.page-header h1 { letter-spacing: -.045em; }
+.account-context { border-radius: 10px; border-left: 3px solid var(--primary); }
+.immediate-publish-panel { grid-template-columns: 1fr; padding: 18px; border-radius: 12px; background: var(--surface); border-color: var(--border); }
+.immediate-publish-heading { display: flex; justify-content: space-between; align-items: end; gap: 12px; }
+.immediate-publish-heading strong { font-size: 15px; }
+.immediate-publish-actions { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.immediate-publish-actions button { min-height: 70px; background: var(--surface-alt); border-radius: 9px; }
+.immediate-publish-actions button.needs-setting { background: color-mix(in srgb, var(--warning-soft) 65%, var(--surface)); }
+.metrics { gap: 10px; }
+.metric-card { border-color: var(--border); border-radius: 10px; box-shadow: none; min-height: 92px; }
+.metric-card-icon { border-radius: 9px; }
+.panel, .hero-panel, .account-card, .modal { border-radius: 12px; box-shadow: none; }
+.dashboard-grid { grid-template-columns: minmax(310px, 1fr) minmax(500px, 1.35fr); }
+:root[data-theme="dark"] .badge:not(.success):not(.warning):not(.danger):not(.muted) { color: #a7ebcd; }
+:root[data-theme="dark"] .immediate-publish-actions button > strong { color: #9aeac4; }
+:root[data-theme="dark"] .immediate-publish-actions button.needs-setting > strong { color: var(--warning); }
+@media (max-width: 1300px) { .immediate-publish-actions { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@media (max-width: 980px) { .immediate-publish-actions { grid-template-columns: repeat(2,minmax(0,1fr)); } .dashboard-grid { grid-template-columns: 1fr; } }
+.provider-threads { --provider-tone: var(--primary); }
+.scheduler-toggle.primary, .scheduler-toggle.primary:hover { box-shadow: none; }
+
+.writing-instructions { min-height: 180px; line-height: 1.6; }

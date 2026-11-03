@@ -5,7 +5,7 @@ import { InvalidThreadsTokenError, TokenInspectionUnavailableError, type Threads
 import type { CredentialManager } from './settings';
 
 const registeredAccountDefaults = (profile: ThreadsProfile): AccountInput & { threadsUserId:string } => ({
-  name:profile.name || profile.username, threadsHandle:profile.username, threadsUserId:profile.id, topic:'', personality:'[표준]', tone:'[표준]', audience:'',
+  name:profile.name || profile.username, threadsHandle:profile.username, threadsUserId:profile.id, topic:'', personality:'[표준]', tone:'[표준]', audience:'', writingInstructions:'',
   forbiddenTopics:'', forbiddenExpressions:'', dailyEnabled:true, promotionEnabled:false, automationTarget:false, active:true,
   dailyRatio:3, promotionRatio:1, dailyPostTarget:1, operationStart:'09:00', operationEnd:'21:00', weekdays:[0,1,2,3,4,5,6],
   commentsEnabled:true, commentIntervalMinutes:10, fixedLinkEnabled:false, fixedLinkUrl:'',

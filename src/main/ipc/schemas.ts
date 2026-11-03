@@ -7,7 +7,7 @@ const coupangPlBrandIdSchema=z.string().refine((value)=>value==='ALL'||COUPANG_P
 const accountInputShape = {
   id: z.string().uuid().optional(), name: z.string().trim().min(1).max(100), threadsHandle: z.string().trim().max(100),
   topic: z.string().trim().max(500), personality: z.string().max(1000), tone: z.string().max(1000), audience: z.string().max(1000),
-  forbiddenTopics: z.string().max(2000), forbiddenExpressions: z.string().max(2000), dailyEnabled: z.boolean(), promotionEnabled: z.boolean(),
+  writingInstructions: z.string().max(12000).default(''), forbiddenTopics: z.string().max(2000), forbiddenExpressions: z.string().max(2000), dailyEnabled: z.boolean(), promotionEnabled: z.boolean(),
   automationTarget: z.boolean(), active: z.boolean(), dailyRatio: z.number().int().min(0).max(100), promotionRatio: z.number().int().min(0).max(100),
   dailyPostTarget: z.number().int().min(1).max(50), operationStart: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), operationEnd: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
   weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7), commentsEnabled: z.boolean().default(true), commentIntervalMinutes: z.number().int().min(5).max(1440),

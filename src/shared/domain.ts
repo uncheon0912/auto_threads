@@ -68,6 +68,7 @@ export interface Account {
   personality: string;
   tone: string;
   audience: string;
+  writingInstructions: string;
   forbiddenTopics: string;
   forbiddenExpressions: string;
   dailyEnabled: boolean;

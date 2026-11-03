@@ -320,6 +320,7 @@ const migrations = [
   `,
   `ALTER TABLE accounts ADD COLUMN threads_token_check_failed_at TEXT;`,
   `ALTER TABLE accounts ADD COLUMN comments_enabled INTEGER NOT NULL DEFAULT 1 CHECK(comments_enabled IN (0,1));`,
+  `ALTER TABLE accounts ADD COLUMN writing_instructions TEXT NOT NULL DEFAULT '';`,
 ];
 
 export class AppDatabase {

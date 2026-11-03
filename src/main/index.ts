@@ -73,7 +73,7 @@ async function createApplication(): Promise<void> {
   console.log(`THREADS_AUTO_DATASTORE_READY=${JSON.stringify({ accountCount: repositories.listAccounts().length })}`);
   if (safeUiTestMode && repositories.listAccounts().length === 0) {
     const uiAccount=repositories.saveAccount({
-      name:'UI 검증 계정', threadsHandle:'', topic:'', personality:'[표준]', tone:'[표준]', audience:'', forbiddenTopics:'', forbiddenExpressions:'',
+      name:'UI 검증 계정', threadsHandle:'', topic:'', personality:'[표준]', tone:'[표준]', audience:'', writingInstructions:'', forbiddenTopics:'', forbiddenExpressions:'',
       dailyEnabled:true, promotionEnabled:false, automationTarget:false, active:true, dailyRatio:3, promotionRatio:1, dailyPostTarget:1,
       operationStart:'09:00', operationEnd:'21:00', weekdays:[0,1,2,3,4,5,6], commentsEnabled:true, commentIntervalMinutes:10, fixedLinkEnabled:false, fixedLinkUrl:'',
     });
@@ -190,8 +190,8 @@ async function createApplication(): Promise<void> {
     : path.join(app.getAppPath(), 'assets', 'app-icon.png');
   mainWindow = new BrowserWindow({
     width: safeUiSmallMode ? 960 : 1280, height: safeUiSmallMode ? 640 : 800, minWidth: 960, minHeight: 640, show: false,
-    backgroundColor: '#100D16', icon: appIconPath,
-    title: safeUiTestMode ? '스레드 자동화 by @복사장의생존발악 — UI 검증' : '스레드 자동화 by @복사장의생존발악',
+    backgroundColor: '#0b0e0d', icon: appIconPath,
+    title: safeUiTestMode ? '스레드 자동화 by @부자사람연구소 — UI 검증' : '스레드 자동화 by @부자사람연구소',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin' ? {} : {
       titleBarOverlay: { color: '#100D16', symbolColor: '#C9BED6', height: 40 },
@@ -214,7 +214,7 @@ async function createApplication(): Promise<void> {
   const rendererUrl=MAIN_WINDOW_VITE_DEV_SERVER_URL
     ||pathToFileURL(path.join(__dirname,`../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)).toString();
   await loadMainRenderer(mainWindow,rendererUrl,{attempts:MAIN_WINDOW_VITE_DEV_SERVER_URL?3:1});
-  if (safeUiTestMode) mainWindow.setTitle('스레드 자동화 by @복사장의생존발악 — UI 검증');
+  if (safeUiTestMode) mainWindow.setTitle('스레드 자동화 by @부자사람연구소 — UI 검증');
   mainWindow.show();
   const uiScreenshotPath=process.env.THREADS_AUTO_UI_SCREENSHOT?.trim();
   if((safeUiTestMode||automationTestLock)&&uiScreenshotPath){

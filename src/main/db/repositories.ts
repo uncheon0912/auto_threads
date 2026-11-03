@@ -69,6 +69,7 @@ function accountFromRow(row: any): Account {
     personality: row.personality,
     tone: row.tone,
     audience: row.audience,
+    writingInstructions: row.writing_instructions ?? '',
     forbiddenTopics: row.forbidden_topics,
     forbiddenExpressions: row.forbidden_expressions,
     dailyEnabled: bool(row.daily_enabled),
@@ -326,16 +327,16 @@ export class Repositories {
     const id = input.id ?? randomUUID();
     this.db.raw.prepare(`
       INSERT INTO accounts (
-        id,threads_user_id,name,threads_handle,topic,personality,tone,audience,forbidden_topics,forbidden_expressions,
+        id,threads_user_id,name,threads_handle,topic,personality,tone,audience,writing_instructions,forbidden_topics,forbidden_expressions,
         daily_enabled,promotion_enabled,automation_target,active,daily_ratio,promotion_ratio,daily_post_target,
         operation_start,operation_end,weekdays_json,comments_enabled,comment_interval_minutes,fixed_link_enabled,fixed_link_url,created_at,updated_at
       ) VALUES (
-        @id,@threadsUserId,@name,@threadsHandle,@topic,@personality,@tone,@audience,@forbiddenTopics,@forbiddenExpressions,
+        @id,@threadsUserId,@name,@threadsHandle,@topic,@personality,@tone,@audience,@writingInstructions,@forbiddenTopics,@forbiddenExpressions,
         @dailyEnabled,@promotionEnabled,@automationTarget,@active,@dailyRatio,@promotionRatio,@dailyPostTarget,
         @operationStart,@operationEnd,@weekdays,@commentsEnabled,@commentIntervalMinutes,@fixedLinkEnabled,@fixedLinkUrl,@createdAt,@updatedAt
       ) ON CONFLICT(id) DO UPDATE SET
         name=excluded.name, threads_handle=excluded.threads_handle, topic=excluded.topic,
-        personality=excluded.personality, tone=excluded.tone, audience=excluded.audience,
+        personality=excluded.personality, tone=excluded.tone, audience=excluded.audience, writing_instructions=excluded.writing_instructions,
         forbidden_topics=excluded.forbidden_topics, forbidden_expressions=excluded.forbidden_expressions,
         daily_enabled=excluded.daily_enabled, promotion_enabled=excluded.promotion_enabled,
         automation_target=excluded.automation_target, active=excluded.active,
@@ -347,6 +348,7 @@ export class Repositories {
         updated_at=excluded.updated_at
     `).run({
       ...input,
+      writingInstructions: input.writingInstructions ?? existing?.writingInstructions ?? '',
       id,
       threadsUserId: input.threadsUserId ?? existing?.threadsUserId ?? null,
       commentsEnabled:Number(input.commentsEnabled ?? true), dailyEnabled: Number(input.dailyEnabled), promotionEnabled: Number(input.promotionEnabled),
