@@ -52,6 +52,20 @@ export interface AgentInvocation {
   settings: CodexSettings;
   webSearch?: boolean;
   signal?: AbortSignal;
+  onActivity?: (message:string)=>void;
+}
+
+/** Safe, content-free summaries of actual Codex JSONL lifecycle events. */
+export function codexActivityFromEvent(event: unknown): string | undefined {
+  if (!event || typeof event !== 'object') return undefined;
+  const entry=event as {type?:unknown;item?:{type?:unknown}};
+  if(entry.type==='thread.started') return 'AI 작업 연결을 시작했습니다.';
+  if(entry.type==='turn.started') return 'AI가 요청을 처리하고 있습니다.';
+  if(entry.type==='item.started' && entry.item?.type==='web_search') return 'AI가 자료를 검색하고 있습니다.';
+  if(entry.type==='item.completed' && entry.item?.type==='web_search') return 'AI의 자료 검색이 완료되었습니다.';
+  if(entry.type==='item.completed' && entry.item?.type==='reasoning') return 'AI가 요청을 분석하고 있습니다.';
+  if(entry.type==='item.completed' && entry.item?.type==='agent_message') return 'AI 응답을 받아 결과를 확인하고 있습니다.';
+  return undefined;
 }
 
 export interface AgentInvocationResult {
@@ -154,6 +168,8 @@ export class CodexRunner {
         if (!line.trim()) return;
         try {
           const event = JSON.parse(line);
+          const activity=codexActivityFromEvent(event);
+          if(activity)try{invocation.onActivity?.(activity);}catch{/* Progress display must not affect the agent result. */}
           if (event.type === 'item.completed' && event.item?.type === 'agent_message') finalText = event.item.text ?? finalText;
           if (event.type === 'error' && typeof event.message === 'string') failureMessage = event.message.slice(0, 4_000);
           if (event.type === 'turn.failed' && typeof event.error?.message === 'string') failureMessage = event.error.message.slice(0, 4_000);

@@ -1,4 +1,4 @@
-import type { JobActivity, PipelineRunView, UserLog } from '../shared/domain';
+import type { AppSnapshot, JobActivity, PipelineRunView, UserLog } from '../shared/domain';
 
 export function chronologicalHistory(runs: PipelineRunView[], logs: UserLog[]) {
   const rows: Array<{kind:'run';key:string;at:string;run:PipelineRunView}|{kind:'log';key:string;at:string;log:UserLog}> = [
@@ -30,7 +30,7 @@ const jobLabel = (kind: JobActivity['kind']) => ({
 export function liveEventFromPipeline(run: PipelineRunView): LiveActivityEvent {
   const tone: LiveActivityTone = run.status === 'COMPLETED' ? 'success' : run.status === 'FAILED' ? 'error' : run.status === 'REJECTED' || run.status === 'STOPPED' ? 'warning' : 'progress';
   const status = tone === 'success' ? '성공' : tone === 'error' ? '실패' : tone === 'warning' ? '경고' : '진행';
-  return { id:`pipeline:${run.id}:${run.status}:${run.updatedAt}`, accountId:run.accountId, source:'pipeline', sourceId:run.id, createdAt:run.updatedAt, status, label:'콘텐츠 Agent', message:run.errorSummary ?? run.message, tone };
+  return { id:`pipeline:${run.id}:${run.status}:${run.stage}:${run.updatedAt}:${run.message}`, accountId:run.accountId, source:'pipeline', sourceId:run.id, createdAt:run.updatedAt, status, label:'콘텐츠 Agent', message:run.errorSummary ?? run.message, tone };
 }
 
 export function liveEventFromJob(activity: JobActivity): LiveActivityEvent | undefined {
@@ -49,9 +49,24 @@ export function liveEventFromLog(log: UserLog): LiveActivityEvent | undefined {
 
 export function appendLiveActivity(current: LiveActivityEvent[], next: LiveActivityEvent | undefined, limit = 30): LiveActivityEvent[] {
   if (!next) return current;
+  const first=current[0];
+  if(first && first.source===next.source && first.sourceId===next.sourceId && first.status===next.status && first.message===next.message)return current;
   return [next, ...current.filter((item) => item.id !== next.id)].slice(0, limit);
 }
 
 function logCategoryLabel(category: string): string {
   return ({ SOURCE:'자료 수집', CONNECTION:'연결 확인', SCHEDULER:'자동화', COMMENTS:'댓글 관리', REPORT:'성과 수집', COUPANG:'쿠팡 파트너스 작업', PREVIEW:'초안 생성' } as Record<string,string>)[category] ?? '시스템';
+}
+
+/** Do not let an older in-flight snapshot erase progress received after it started. */
+export function mergeSnapshotPreservingLive(current:AppSnapshot|undefined, incoming:AppSnapshot, requestedAt:number):AppSnapshot {
+  if(!current)return incoming;
+  const previous=new Map(current.pipelineRuns.map(run=>[run.id,run]));
+  const merged=incoming.pipelineRuns.map(run=>{
+    const live=previous.get(run.id);previous.delete(run.id);
+    return live && Date.parse(live.updatedAt)>Date.parse(run.updatedAt) ? live : run;
+  });
+  for(const run of previous.values())if(Date.parse(run.updatedAt)>=requestedAt)merged.push(run);
+  merged.sort((a,b)=>Date.parse(b.updatedAt)-Date.parse(a.updatedAt));
+  return {...incoming,pipelineRuns:merged.slice(0,100)};
 }

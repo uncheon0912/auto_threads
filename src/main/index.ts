@@ -307,6 +307,16 @@ async function createApplication(): Promise<void> {
       await mainWindow.webContents.executeJavaScript("document.querySelectorAll('.workspace-journey button')[1]?.click()");
       await new Promise((resolve)=>setTimeout(resolve,300));
     }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='live-progress') {
+      const account=repositories.listAccounts()[0];
+      if(account){
+        const sample=repositories.createPipelineRun({accountId:account.id,mode:'PUBLISH',message:'즉시 발행 작업을 준비합니다.'});
+        repositories.updatePipelineRun(sample.id,{stage:'WRITER',progress:50,message:'작성 Agent · AI가 요청을 처리하고 있습니다.'});
+        await new Promise((resolve)=>setTimeout(resolve,300));
+        await mainWindow.webContents.executeJavaScript("document.querySelector('#workspace-publish')?.scrollIntoView({block:'start'})");
+        await new Promise((resolve)=>setTimeout(resolve,300));
+      }
+    }
     if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='collector-guide') {
       await mainWindow.webContents.executeJavaScript("document.querySelector('.extension-install-button')?.click()");
       await new Promise((resolve)=>setTimeout(resolve,300));

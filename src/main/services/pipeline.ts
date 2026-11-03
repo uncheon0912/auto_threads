@@ -173,7 +173,7 @@ export class AutomationPipeline implements JobHandler {
       forbiddenTopics: account.forbiddenTopics, forbiddenExpressions: account.forbiddenExpressions };
   }
 
-  private async agent(role: AgentRole, prompt: string, webSearch = false, signal?:AbortSignal, customDaily = false) {
+  private async agent(role: AgentRole, prompt: string, webSearch = false, signal?:AbortSignal, customDaily = false, runId?:string) {
     const settings = await this.settings.read();
     signal?.throwIfAborted();
     const escapedPrompt = prompt.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -183,6 +183,13 @@ export class AutomationPipeline implements JobHandler {
       settings: settings.codex,
       webSearch,
       signal,
+      onActivity:runId ? (message)=>{
+        const current=this.repositories.getPipelineRun(runId);
+        if(current?.status!=='RUNNING')return;
+        const roleLabel=({topic:'글감',writer:'작성',reviewer:'품질 검토',orchestrator:'최종 검수'} as Partial<Record<AgentRole,string>>)[role]??'AI';
+        const detail=`${roleLabel} Agent · ${message}`;
+        if(current.message!==detail)this.repositories.updatePipelineRun(runId,{message:detail});
+      } : undefined,
     });
     this.usage.addRoutineTokens(run.totalTokens);
     return run.result;
@@ -385,7 +392,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
         :`일상글 작성 Agent가 독립 검수 의견을 반영해 ${attempt}/${MAX_AGENT_SUBMISSIONS}차 수정하고 있습니다.`);
       const result=await this.agent('writer',feedback
         ? `${basePrompt}\n\n이전 제출은 다음 이유로 사용할 수 없었다. 같은 문장을 변명하거나 PASS 표시만 바꾸지 말고 글감 또는 표현을 실제로 고쳐 다시 완성하라.\n${JSON.stringify({previousRejection:feedback,submission:attempt,maxSubmissions:MAX_AGENT_SUBMISSIONS})}`
-        : basePrompt,false,undefined,customDaily);
+        : basePrompt,false,undefined,customDaily,runId);
       const candidate=customDaily ? (result.content??'').replace(/\r\n?/g,'\n').trim() : formatThreadsPostText(result.content??'');
       let mechanicalFailure=result.decision!=='PASS'
         ? result.reason
@@ -404,7 +411,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
         this.progress(runId,'ORCHESTRATOR',60+attempt*10,'독립 편집 Agent가 첫 줄·입말·게시 가치를 검수하고 있습니다.',{draftBody:body});
         const review=await this.agent('orchestrator',buildHumanQualityPrompt({
           mode:'DAILY',profile:this.profile(account),body,recent,
-        }),false,undefined,customDaily);
+        }),false,undefined,customDaily,runId);
         vetoes=review.vetoes;
         mechanicalFailure=review.decision!=='PASS'||review.vetoes.length
           ? `독립 검수 반려: ${review.reason}`
@@ -487,7 +494,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
       this.progress(runId,'TOPIC',35,attempt===1?'글감 Agent가 게시 가치와 관점을 판단하고 있습니다.':`글감 Agent가 반려 사유를 반영해 ${attempt}/${topicSubmissionLimit}차 수정안을 제출하고 있습니다.`);
       const candidate=await this.agent('topic',topicFeedback
         ? `${topicPrompt}\n\n이전 제출은 다음 이유로 반려되었다. 같은 자료와 사실 경계를 유지하면서 지적된 부분을 구체적으로 수정해 다시 제출하라. 단순히 PASS로 바꾸거나 반려 사유를 변명하지 마라. 수정할 수 없는 자료일 때만 REJECT하라.\n${JSON.stringify({previousRejection:topicFeedback,submission:attempt,maxSubmissions:topicSubmissionLimit})}`
-        : topicPrompt,false);
+        : topicPrompt,false,undefined,false,runId);
       const researched=manualCoupang ? normalizeAffiliateImageUrl(candidate.imageUrl??cachedImageUrl??'',promotionCandidate?.sourceType) : undefined;
       topicFailure=candidate.decision!=='PASS'
         ? candidate.reason
@@ -550,7 +557,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
       this.progress(runId,'WRITER',52,attempt===1?'본문 Agent가 첫 초안을 작성하고 있습니다.':`본문 Agent가 검토 의견을 반영해 ${attempt}/${submissionLimit}차 수정안을 작성하고 있습니다.`);
       const writer=await this.agent('writer',revisionFeedback
         ? `${writerBasePrompt}\n\n이전 본문은 아래 이유로 반려되었다. ${revisionScopeRule}\n${JSON.stringify({previousBody:previousDraft,previousRejection:revisionFeedback,submission:attempt,maxSubmissions:submissionLimit})}`
-        : writerBasePrompt);
+        : writerBasePrompt,false,undefined,false,runId);
       if(writer.decision!=='PASS'||writer.vetoes.length>0||!writer.content?.trim()){
         finalFailure=`본문 Agent가 작성을 중단했습니다: ${writer.reason}`;
         finalVetoes=writer.vetoes;
@@ -572,7 +579,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
       const reviewer=await this.agent('reviewer',coupangCandidate?buildHumanQualityPrompt({
         profile:this.profile(account,'PROMOTION'),mode:'COUPANG_PROMOTION',topic:topic.topic,body:writerBody,
         evidence:{candidate:verifiedPromptCandidate,plan:topic,excludedRawNames:rawExcludedNames},
-      }):`본문의 사실성, 자연스러움, 계정 말투, 과장, 의미 중복과 실제 게시 가치를 검토하라. ${PROMOTION_PROFILE_RULE} ${buildModeQualityRubric(mode)} PROMOTION은 생활감이나 유머 부족을 감점하지 마라. 후보에 없는 사실을 추가하거나 원문을 목차처럼 재구성하지 않았는지 검토하라. 반려할 때는 작성 Agent가 다음 제출에서 무엇을 덜고, 무엇을 구체화하고, 어떤 사실 경계를 지켜야 하는지 reason에 실행 가능한 수정 지시를 써라. 통과할 때는 최종 본문을 content에 반환하고 단순 금지어 치환이나 문자열 유사도로 판단하지 마라.\n${JSON.stringify({profile:this.profile(account,'PROMOTION'),mode,provenance,plan:topic,evidence:verifiedPromptCandidate,draft:writerBody,recent})}`);
+      }):`본문의 사실성, 자연스러움, 계정 말투, 과장, 의미 중복과 실제 게시 가치를 검토하라. ${PROMOTION_PROFILE_RULE} ${buildModeQualityRubric(mode)} PROMOTION은 생활감이나 유머 부족을 감점하지 마라. 후보에 없는 사실을 추가하거나 원문을 목차처럼 재구성하지 않았는지 검토하라. 반려할 때는 작성 Agent가 다음 제출에서 무엇을 덜고, 무엇을 구체화하고, 어떤 사실 경계를 지켜야 하는지 reason에 실행 가능한 수정 지시를 써라. 통과할 때는 최종 본문을 content에 반환하고 단순 금지어 치환이나 문자열 유사도로 판단하지 마라.\n${JSON.stringify({profile:this.profile(account,'PROMOTION'),mode,provenance,plan:topic,evidence:verifiedPromptCandidate,draft:writerBody,recent})}`,false,undefined,false,runId);
       quality=[{stage:'REVIEWER',decision:reviewer.decision==='PASS'?'PASS':'REJECT',reason:reviewer.reason,vetoes:reviewer.vetoes}];
       if(reviewer.decision!=='PASS'||reviewer.vetoes.length>0||!reviewer.content?.trim()){
         finalFailure=`품질 Agent 반려: ${reviewer.reason}`;
@@ -602,7 +609,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
       this.progress(runId,'ORCHESTRATOR',86,coupangCandidate?'독립 광고 품질 Agent가 상품 이점과 근거 연결을 최종 판정하고 있습니다.':'독립 자연스러움 Agent가 사람다운 문장인지 최종 판정하고 있습니다.',{draftBody:candidateBody,quality});
       const finalDecision=await this.agent('orchestrator',buildHumanQualityPrompt({
         profile:this.profile(account,'PROMOTION'),mode:qualityMode,body:candidateBody,evidence:verifiedPromptCandidate,
-      }));
+      }),false,undefined,false,runId);
       quality.push({stage:'ORCHESTRATOR',decision:finalDecision.decision==='PASS'?'PASS':'REJECT',reason:finalDecision.reason,vetoes:finalDecision.vetoes});
       if(finalDecision.decision!=='PASS'||finalDecision.vetoes.length>0||!finalDecision.content?.trim()||finalDecision.content.trim()!==candidateBody){
         const changed=finalDecision.decision==='PASS'&&finalDecision.content?.trim()!==candidateBody;
