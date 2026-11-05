@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { codexProcessEnvironment } from './environment';
 import type { CodexUsageStatus } from '../../shared/domain';
 import { POLICY } from '../../shared/policy';
+import { codexModelChoices } from '../../shared/2026-11-04-codex-models';
 
 interface WindowShape { usedPercent: number; windowDurationMins?: number | null; resetsAt?: number | null }
 
@@ -9,14 +10,16 @@ export function weeklyUsageFromResponse(response: any, routineTokens = 0): Codex
   const root = response?.rateLimitsByLimitId?.codex ?? response?.rateLimits ?? response;
   const windows: WindowShape[] = [root?.primary, root?.secondary].filter(Boolean);
   const weekly = windows.find((item) => item.windowDurationMins === POLICY.weeklyWindowMinutes);
-  if (!weekly || !Number.isFinite(weekly.usedPercent)) return { routineTokens, available: false };
-  const remaining = Math.max(0, Math.min(100, 100 - weekly.usedPercent));
+  const fiveHour = windows.find((item) => item.windowDurationMins === 300);
+  const percent = (item?: WindowShape) => item && Number.isFinite(item.usedPercent) ? Math.max(0, Math.min(100, 100 - item.usedPercent)) : undefined;
   return {
     routineTokens,
-    weeklyRemainingPercent: remaining,
-    resetsAt: weekly.resetsAt ? new Date(weekly.resetsAt * 1000).toISOString() : undefined,
+    weeklyRemainingPercent: percent(weekly),
+    fiveHourRemainingPercent: percent(fiveHour),
+    resetsAt: weekly?.resetsAt ? new Date(weekly.resetsAt * 1000).toISOString() : undefined,
+    fiveHourResetsAt: fiveHour?.resetsAt ? new Date(fiveHour.resetsAt * 1000).toISOString() : undefined,
     checkedAt: new Date().toISOString(),
-    available: true,
+    available: percent(weekly) !== undefined,
   };
 }
 
@@ -26,6 +29,10 @@ export class CodexRateLimitClient {
   private requestId = 0;
   private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private routineTokens = 0;
+  private refreshTimer?: NodeJS.Timeout;
+  private reconnectTimer?: NodeJS.Timeout;
+  private reconnectAttempts = 0;
+  private stopped = false;
   private status: CodexUsageStatus = { routineTokens: 0, available: false };
   private listeners = new Set<(status: CodexUsageStatus) => void>();
 
@@ -39,6 +46,8 @@ export class CodexRateLimitClient {
   private send(message: unknown): void { this.child?.stdin.write(`${JSON.stringify(message)}\n`); }
 
   private disconnect(error: Error): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = undefined;
     const child = this.child;
     this.child = undefined;
     for (const pending of this.pending.values()) {
@@ -49,6 +58,10 @@ export class CodexRateLimitClient {
     this.status = { routineTokens: this.routineTokens, available: false };
     this.emit();
     child?.kill();
+    if (!this.stopped && !this.reconnectTimer) {
+      const delay=Math.min(60_000,2_000 * 2 ** Math.min(this.reconnectAttempts++,5));
+      this.reconnectTimer=setTimeout(()=>{this.reconnectTimer=undefined;void this.start().catch(()=>undefined);},delay);
+    }
   }
 
   private request(method: string, params: unknown): Promise<any> {
@@ -61,22 +74,36 @@ export class CodexRateLimitClient {
   }
 
   async start(): Promise<void> {
+    this.stopped=false;
     if (this.child) return;
     this.child = spawn(this.executable, ['app-server', '--listen', 'stdio://'], { shell: false, windowsHide: true,env:codexProcessEnvironment() });
     this.child.stdout.on('data', (chunk: Buffer) => this.consume(chunk.toString('utf8')));
     this.child.stderr.on('data', () => { /* pipe backpressure 방지를 위해 소비한다. */ });
-    this.child.once('error', (error) => this.disconnect(error));
-    this.child.once('close', () => this.disconnect(new Error('Codex App Server 연결이 종료되었습니다.')));
-    await this.request('initialize', { clientInfo: { name: 'threads-auto', title: 'Threads Auto', version: '0.1.0' }, capabilities: { experimentalApi: true } });
-    this.send({ method: 'initialized' });
-    await this.refresh();
+    const child = this.child;
+    child.once('error', (error) => { if (this.child === child) this.disconnect(error); });
+    child.once('close', () => { if (this.child === child) this.disconnect(new Error('Codex App Server 연결이 종료되었습니다.')); });
+    try {
+      await this.request('initialize', { clientInfo: { name: 'threads-auto', title: 'Threads Auto', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      this.send({ method: 'initialized' });
+      await this.refresh();
+      if(this.child!==child)throw new Error('Codex App Server 연결이 종료되었습니다.');
+      this.reconnectAttempts=0;
+      this.refreshTimer = setInterval(() => { void this.refresh(); }, 60_000);
+    } catch(error) {
+      if(this.child===child)this.disconnect(error instanceof Error?error:new Error(String(error)));
+      throw error;
+    }
   }
 
   async refresh(): Promise<CodexUsageStatus> {
-    try {
-      const response = await this.request('account/rateLimits/read', null);
-      this.status = weeklyUsageFromResponse(response, this.routineTokens);
-    } catch { this.status = { routineTokens: this.routineTokens, available: false }; }
+    if (!this.child) { try { await this.start(); } catch { return this.status; } return this.status; }
+    const [limits, account, models] = await Promise.allSettled([
+      this.request('account/rateLimits/read', null), this.request('account/read', { refreshToken: false }), this.request('model/list', { limit: 100 }),
+    ]);
+    const usage = limits.status === 'fulfilled' ? weeklyUsageFromResponse(limits.value, this.routineTokens) : { routineTokens: this.routineTokens, available: false };
+    const loginStatus = account.status === 'fulfilled' ? (account.value?.account?.type === 'chatgpt' ? 'connected' : account.value?.account ? 'unknown' : 'login_required') : 'unknown';
+    const choices = models.status === 'fulfilled' && Array.isArray(models.value?.data) ? models.value.data.filter((item: any) => !item.hidden && typeof item.model === 'string' && typeof item.displayName === 'string').map((item: any) => ({ value: item.model, label: item.displayName })) : [];
+    this.status = { ...usage, loginStatus, models: codexModelChoices(choices) };
     this.emit();
     return this.status;
   }
@@ -108,5 +135,5 @@ export class CodexRateLimitClient {
     }
   }
 
-  stop(): void { this.child?.stdin.end(); this.child?.kill(); this.child = undefined; }
+  stop(): void { this.stopped=true; if(this.reconnectTimer)clearTimeout(this.reconnectTimer);this.reconnectTimer=undefined; if (this.refreshTimer) clearInterval(this.refreshTimer); this.refreshTimer = undefined; if (this.child) this.disconnect(new Error('Codex App Server 연결이 종료되었습니다.')); }
 }

@@ -79,28 +79,10 @@ export function buildHumanQualityPrompt(input: {
   evidence?: unknown;
   recent?: unknown;
 }): string {
-  if (input.mode === 'DAILY') return `너는 한국어 Threads 일상 글의 냉정한 편집 Agent다. 문장을 고치지 말고 게시할 가치가 있는지만 판정하라.
-
-${input.profile.writingInstructions?.trim() ? '사용자가 제공한 profile.writingInstructions를 글의 목적·주제·분량·줄바꿈·마무리 기준으로 검토한다. 자연스러운 매장과 서비스 소개 및 프로필 확인 안내는 허용한다. 단, 사실을 꾸미거나 금지사항을 위반하면 반려한다. 지침의 예시는 형식 참고용이며 사실 근거가 아니다. 형식 지침이 비현실적이거나 다른 안전 규칙과 충돌하면 안전을 우선한다.' : DAILY_WRITING_DIRECTION}
-작성자의 의도나 예상 반응을 대신 만들어 글을 변호하지 마라. 첫 줄이 약하면 다른 장점으로 상쇄할 수 없다. 문법이 맞고 말이 된다는 것은 PASS 근거가 아니다. 문장을 지워도 핵심과 감정이 그대로면 불필요한 설명이다. 마지막 줄은 질문/평서문 각각의 자연스러움을 판단하고, 물음표 유무 자체로 가산점이나 감점을 주지 않는다.
-간결성은 별도 탈락 조건이다. 속으로 더 짧은 입말 버전을 만들어 비교하라. 본문의 예시·조건·부연을 상당 부분 덜어도 상황과 감정과 독자가 보탤 말이 그대로라면 현재 원문은 EXPLANATORY_STACKING 또는 REDUNDANT_SUMMARY로 REJECT한다. 개선안을 content로 대신 반환하지 마라. '구체성을 더한다', '추가 부담을 제시한다'는 이유만으로 불필요한 절을 정당화하지 마라. 훅에 모순이 있어도 본문이 사용자 요구사항 설명서처럼 늘어지면 NON_NATIVE_THREADS_VOICE로 탈락이다.
-
-profile은 사용자가 직접 지정한 본문 가공 기준이다. audience가 비어 있으면 독자층 제한 없이 작성하며, 미입력을 반려 사유로 삼지 마라. topic·personality·tone·audience를 포함해 소재·관점·어휘·강도·호흡을 판정하고 forbiddenTopics·forbiddenExpressions는 반드시 지켜라. Threads다운 자연스러움이나 첫 문장 훅을 만들기 위해 사용자의 말투·성격·독자층을 반대 방향으로 바꾸거나 지우지 마라. 두 요구가 충돌하면 사용자 설정을 우선한 다른 표현이 가능한지 먼저 판단하고, 양립할 수 없거나 본문이 설정을 무시했으면 USER_PROFILE_CONFLICT로 REJECT하라.
-
-최종 반증 심사 순서(첫 문장 훅과 전체 말투를 각각 독립적으로 검사):
-0. 이 글에는 실제 경험을 뒷받침하는 출처가 없다. 특정 날짜·장소·사람과의 사건, 실제로 한 말, 구매·수익·경험을 지어냈다면 UNSUPPORTED_EPISODE 또는 INVENTED_DIALOGUE다. 일반적인 의견·선호·생활 패턴이나 조건부 상황까지 금지하지는 않는다. 자연스러운 재치와 비유는 허용하지만 억지 명언·교훈으로 평범한 내용을 포장하지 마라.
-1. profile과 topic을 잠시 가리고 읽는다. 이론적으로 가능한가가 아니라 사람들이 실제로 겪는 자연스러운 배치·동선·행동인가? 의도한 대상이나 숨은 사정을 임의로 보충하지 마라.
-2. 첫 문장만 피드에 남기고 나머지를 가린다. 독자가 이미 관심 있다고 가정하지 말고, 이 첫 줄 자체가 구체적 마찰·의외성·태도·답하고 싶은 궁금증 중 하나로 다음 줄을 볼 이유를 만드는가? 질문표나 유행어가 있다는 사실은 훅의 증거가 아니다. 구체적인 물건이 나왔다는 사실도 충분하지 않다. '무엇을 할 때 무엇이 궁금하다/아쉽다'라는 평범한 서론은 뒤 문장의 구체성으로 구제하지 말고 핵심을 첫 줄로 옮기도록 WEAK_OPENING_HOOK로 반려하라.
-3. 독자가 보일 구체적인 반응 하나를 떠올린다. 단순히 '공감된다·구체적이다·아이러니·가벼운 유머'라고 평가하거나 본문을 풀어 설명하는 것은 반응도 PASS 근거도 아니다. 실제로 공감을 일으키는 문장인지 판단하라.
-4. 둘째 문장이 있다면 첫째에 없던 선명한 결과·태도·관점·자연스러운 질문을 더하는가? 요청한 분량 안에서 후속 문장이 새로운 관점이나 선택을 더하는지 판단하라. 여러 문장을 썼다면 작은 불편 뒤에 예상 가능한 작은 불편이나 원인 설명만 붙인 글은 게시 가치가 없다.
-5. profile은 화자의 시야와 말투를 정하지만 한 게시물에 직업·연령·관심사를 모두 증명하게 하지 마라. 직업·관심사 명사를 넣었다는 이유로 약한 글을 구제하지 말고, 반대로 다른 사람도 공감하거나 말할 수 있다는 이유만으로 반려하지도 마라. 사용자 설정과 반대되는 화법인지, 아무 관점도 없는 안전한 문장인지, 프로필을 보이려고 무관한 요소를 작위적으로 합쳤는지를 판단한다.
-6. 소리 내어 읽는다. 반말·존댓말 어미를 제거해도 짧은 보고서의 어순과 리듬만 남는지 확인한다. 상위 분류어·공식 UI 용어·분석어, 낯선 명사·동사 결합, 지시 대상이 흐린 표현, 설명을 위한 군더더기는 반려한다. 이는 금지어 목록이 아니며 문맥의 자연스러움을 판단한다. '공기'처럼 감성적인 추상어, '치니들' 같은 호칭, 질문도 역할이 자연스러울 때만 허용하며 질문 유무 자체로 PASS하거나 REJECT하지 마라.
-7. 최근 글과 소재만 달라지고 도입·문장 역할·결말 골격이 같은지 비교한다. 문장 수만 세지 말고 의미 구조를 본다. 특히 '구매 전에 궁금한 점 → 이유 설명 → 알려주면 좋겠다는 요청'처럼 사물만 바꾼 연속 글은 FORMULAIC_OBSERVATION이다. 첫 글이 좋았다는 이유로 같은 틀의 다음 글까지 통과시키지 마라.
-
-가장 강한 반론을 본문에 실제로 적힌 말만으로 반박하지 못하거나 애매하면 REJECT한다. 허용 veto 코드는 UNSUPPORTED_EPISODE, INVENTED_DIALOGUE, SCRIPTED_ARC, PUNCHLINE_CLOSURE, AGE_STEREOTYPE, AI_ABSTRACT_LEXICON, AWKWARD_COLLOQUIAL_WORDING, LOW_RESONANCE, NO_PUBLISH_VALUE, REDUNDANT_SUMMARY, TOPIC_TUNNEL_VISION, FORCED_ENGAGEMENT, FILLER_COMPLETION, EXPLANATORY_STACKING, SAFE_REACTION_CLOSURE, FORMULAIC_OBSERVATION, PROFILE_INTERCHANGEABLE, UNCLEAR_REFERENT, ACTION_CAUSALITY_GAP, CONTRIVED_SCENARIO, EMPTY_CONTRAST, WEAK_OPENING_HOOK, NON_NATIVE_THREADS_VOICE, USER_PROFILE_CONFLICT다.
-
-reason은 450자 이내로 "strongestObjection=...; coldRead=...; likelyReaderResponse=...; verdictEvidence=..."를 각각 한 문장으로 쓴다. coldRead에는 첫 줄의 정확한 표현과 멈춰 읽을 이유, strongestObjection에는 가장 늘어지거나 작위적인 실제 구절, verdictEvidence에는 마지막 문장의 역할과 최근 글 대비 반복 여부를 명시하라. '태도가 선명하다/공감 가능하다/조건을 더했다'는 추상적 변호로 PASS하지 마라. 구체적인 독자 반응을 제시할 수 없으면 LOW_RESONANCE 또는 NO_PUBLISH_VALUE로 REJECT한다. PASS일 때만 vetoes를 빈 배열로 두고 content에 원문을 그대로 반환한다. REJECT면 content는 null이다.
-
+  if (input.mode === 'DAILY') return `너는 한국어 Threads 글의 독립 검수자다. 사용자의 profile.writingInstructions와 주제·말투·금지사항을 존중하면서 본문을 검토하라. 지침의 예시는 실제 경험의 증거가 아니다.
+근거 없는 실제 경험·수치·대사, 금지사항 위반, 독자를 오도하는 주장, 핵심 문장의 인과관계나 지시 대상이 이해되지 않는 경우는 반려한다. 불필요한 반복이나 부자연스러운 문장이 전달을 실질적으로 방해하는 경우에도 반려할 수 있다.
+첫 문장과 본문이 같은 주제로 이어지는지 확인하되, 취향 차이, 더 나은 표현의 가능성, 예상 반응의 불확실성만으로 반려하지 마라. 광고나 매장 안내라는 사실 자체는 반려 사유가 아니다. 실제 문구를 짚고 수정할 부분을 간결하게 설명하라.
+자연스러운 매장과 서비스 소개 및 안내는 허용한다. 반려 시 reason에 구체적인 문제와 고칠 방향을 적고 content는 null로 반환한다. 안전과 의미 전달에 중요한 문제가 없으면 PASS하고 본문을 수정하지 않은 채 content로 반환하며 vetoes와 sourceUrls는 빈 배열로 둔다.
 ${JSON.stringify({profile:input.profile,topic:input.topic,body:input.body,recent:input.recent})}`;
   const rejectionRules = input.mode === 'COUPANG_PROMOTION'
       ? `- 상품 페이지와 후기 표본에 없는 효능·성능·가격·할인·재고·배송·사용 경험을 추가한다.

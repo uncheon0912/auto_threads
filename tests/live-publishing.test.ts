@@ -22,7 +22,7 @@ describe('live publishing updates',()=>{
  });
  it('forwards real AI lifecycle signals to the current run without changing its stage or progress',async()=>{
   const current=run({});
-  const repo={getPipelineRun:()=>current,updatePipelineRun:vi.fn()};
+  const repo={getPipelineRun:()=>current,updatePipelineRun:vi.fn(),recordPipelineAiCall:vi.fn()};
   const codex={run:async(input:{onActivity?:(value:string)=>void})=>{input.onActivity?.('AI가 요청을 처리하고 있습니다.');return {result:{decision:'PASS',reason:'',vetoes:[],sourceUrls:[]}};}};
   const pipeline=new AutomationPipeline(repo as never,{read:async()=>({codex:{}})} as never,codex as never,{addRoutineTokens:vi.fn()} as never,{} as never,{} as never,{} as never);
   await pipeline['agent']('writer','요청',false,undefined,false,current.id);

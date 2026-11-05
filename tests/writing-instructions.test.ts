@@ -16,7 +16,7 @@ describe('account daily instructions',()=>{
  });
  it('passes guidance to writer and reviewer and retains reviewed line breaks',async()=>{
   const prompts:string[]=[];
-  const repo={recentContentForAgent:()=>[],updatePipelineRun:vi.fn(),addLog:vi.fn()};
+  const repo={recentContentForAgent:()=>[],updatePipelineRun:vi.fn(),addLog:vi.fn(),recordPipelineAiCall:vi.fn()};
   const settings={read:async()=>({codex:{}})};
   const codex={run:async({prompt}:{prompt:string})=>{prompts.push(prompt);return {totalTokens:0,result:result(body)};}};
   const usage={addRoutineTokens:vi.fn()};
@@ -29,7 +29,7 @@ describe('account daily instructions',()=>{
   expect(pipeline['profile'](account,'PROMOTION')).not.toHaveProperty('writingInstructions');
  });
  it('keeps independent rejection when guidance is present',async()=>{
-  const repo={recentContentForAgent:()=>[],updatePipelineRun:vi.fn(),addLog:vi.fn(),getPipelineRun:()=>({accountId:account.id})};
+  const repo={recentContentForAgent:()=>[],updatePipelineRun:vi.fn(),addLog:vi.fn(),getPipelineRun:()=>({accountId:account.id}),recordPipelineAiCall:vi.fn()};
   const settings={read:async()=>({codex:{}})};
   const codex={run:async({role}:{role:string})=>({totalTokens:0,result:role==='writer'?result(body):{...result(''),decision:'REJECT',reason:'허위 사실',vetoes:['UNSUPPORTED_EPISODE']}})};
   const pipeline=new AutomationPipeline(repo as never,settings as never,codex as never,{addRoutineTokens:vi.fn()} as never,{} as never,{} as never,{} as never);

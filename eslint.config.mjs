@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['.vite/**', 'out/**', 'node_modules/**', 'data/**', 'test-artifacts/**', '.diagnostics/**', '.codex-recovery/**', 'artifacts/**'] },
+  { ignores: ['.vite/**', 'out/**', 'node_modules/**', 'data/**', 'test-artifacts/**', '.diagnostics/**', '.codex-recovery/**', 'artifacts/**', '2026-11-04-codex-empty-test/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

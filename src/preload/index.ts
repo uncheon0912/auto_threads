@@ -9,6 +9,11 @@ window.addEventListener('DOMContentLoaded', () => {
 
 const api = {
   snapshot: () => ipcRenderer.invoke('app:snapshot'),
+  codex: {
+    login: () => ipcRenderer.invoke('codex:login') as Promise<CodexUsageStatus>,
+    refresh: () => ipcRenderer.invoke('codex:refresh') as Promise<CodexUsageStatus>,
+    saveSelection: (input:{model?:string;reasoningEffort?:AppSettings['codex']['reasoningEffort']}) => ipcRenderer.invoke('codex:save-selection',input) as Promise<AppSettings['codex']>,
+  },
   accounts: {
     register: (accessToken: string) => ipcRenderer.invoke('accounts:register-threads', { accessToken }),
     updateToken: (accountId: string, accessToken: string) => ipcRenderer.invoke('accounts:update-threads-token', { accountId, accessToken }),
@@ -69,6 +74,7 @@ const api = {
   },
   connections: { test: (type: 'THREADS'|'YOUTUBE'|'BLOG'|'COUPANG', accountId?: string, config: Record<string, unknown> = {}) => ipcRenderer.invoke('connections:test', { type, accountId, config }) },
   automation: {
+    stopAccount: (accountId:string) => ipcRenderer.invoke('automation:stop-account',accountId) as Promise<{cancelled:number}>,
     set: (enabled: boolean) => ipcRenderer.invoke('automation:set', enabled) as Promise<AutomationScheduleMutationResult>,
     cancel: (id: string) => ipcRenderer.invoke('automation:cancel', id),
     updatePromotionType: (input:{jobId:string;accountId:string;sourceType:Exclude<SourceType,'DAILY'>}) => ipcRenderer.invoke('automation:update-promotion-type', input) as Promise<JobRecord>,

@@ -363,6 +363,10 @@ export interface PipelineQualityDecision {
 }
 
 export interface PipelineRunView {
+  aiCalls?: number;
+  aiMeasuredCalls?: number;
+  aiInputTokens?: number;
+  aiOutputTokens?: number;
   collectedCommentCount?: number;
   threadsPostId?: string;
   postDeletedAt?: string;
@@ -442,6 +446,10 @@ export interface CodexHealth {
 
 export interface CodexUsageStatus {
   routineTokens: number;
+  loginStatus?: 'connected' | 'login_required' | 'unknown';
+  models?: Array<{ value: string; label: string }>;
+  fiveHourRemainingPercent?: number;
+  fiveHourResetsAt?: string;
   weeklyRemainingPercent?: number;
   resetsAt?: string;
   checkedAt?: string;
@@ -535,4 +543,5 @@ export interface AppSnapshot {
   runningJobs: JobRecord[];
   accountRuntime: Record<string, AccountRuntimeSummary>;
   pipelineRuns: PipelineRunView[];
+  scheduledPublicationHistory?: PipelineRunView[];
 }

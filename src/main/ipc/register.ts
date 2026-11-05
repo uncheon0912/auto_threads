@@ -5,6 +5,7 @@ import { prepareExtensionInstallation } from '../services/extension-installation
 import type { CoupangProductQueueItem, CoupangProviderConfig, CredentialKey, SourceCandidate, SourceType } from '../../shared/domain';
 import { COUPANG_CATEGORY_OPTIONS } from '../../shared/coupang-catalog';
 import { POLICY } from '../../shared/policy';
+import { codexModelSelectionError } from '../../shared/2026-11-04-codex-models';
 import type { Repositories } from '../db/repositories';
 import type { CoupangProvider, ProviderRegistry, ThreadsProvider } from '../providers/contracts';
 import type { AutomationScheduler } from '../services/scheduler';
@@ -154,6 +155,21 @@ export function registerIpc(deps: Dependencies): void {
     ipcMain.handle(channel, async (event, raw) => { trusted(event, deps.window); return handler(schema ? schema.parse(raw) : raw as T); });
   };
 
+  let loginInProgress = false;
+  handle('codex:login', undefined, async () => {
+    if (loginInProgress) throw new Error('Codex 로그인이 이미 진행 중입니다.');
+    loginInProgress = true;
+    try { await deps.codex.login(); deps.usage.stop(); await deps.usage.start(); return deps.usage.current(); }
+    finally { loginInProgress = false; }
+  });
+  handle('codex:refresh', undefined, async () => deps.usage.refresh());
+  handle('codex:save-selection', z.object({model:z.string().trim().min(1).max(100).optional(),reasoningEffort:z.enum(['low','medium','high','xhigh']).optional()}).refine(value=>value.model!==undefined||value.reasoningEffort!==undefined), async (input) => {
+    if(input.model){const error=codexModelSelectionError(input.model);if(error)throw new Error(error);}
+    const current=await deps.settings.read();
+    const next={...current,codex:{...current.codex,...input}};
+    await deps.settings.save(next);
+    return next.codex;
+  });
   handle('app:snapshot', undefined, async () => {
     const counts = deps.repositories.counts();
     const accounts = deps.repositories.listAccounts();
@@ -213,7 +229,7 @@ export function registerIpc(deps: Dependencies): void {
     const diagnosticLogs = deps.repositories.recentLogs(200)
       .filter((log) => log.level === 'WARN' || log.level === 'ERROR')
       .map((log) => ({ ...log, detail:undefined, diagnosticSummary:redactForUi(log.detail) }));
-    return { accounts, logs: diagnosticLogs, settings: await deps.settings.read(), pendingJobs: deps.repositories.pendingJobs(), runningJobs:deps.repositories.runningJobs(), pipelineRuns:deps.repositories.listPipelineRuns(undefined, 100), dashboard: {
+    return { accounts, logs: diagnosticLogs, settings: await deps.settings.read(), pendingJobs: deps.repositories.pendingJobs(), runningJobs:deps.repositories.runningJobs(), pipelineRuns:deps.repositories.listPipelineRuns(undefined, 100), scheduledPublicationHistory:deps.repositories.listScheduledPublicationHistory(100), dashboard: {
       automationRunning: deps.scheduler.isRunning(), accountCount: counts.accounts, automationAccountCount: counts.automation,
       todaySuccessCount: counts.successToday, failedJobCount: counts.failed, pendingJobCount: counts.pending,
       recentPosts: deps.repositories.recentPosts(100), recentErrors: diagnosticLogs.filter((log) => log.level === 'ERROR').slice(0,20),
@@ -503,7 +519,7 @@ export function registerIpc(deps: Dependencies): void {
   });
   handle('automation:set', z.boolean(), async (enabled) => {
     if (enabled && deps.safeUiTestMode) throw new Error('안전 UI 테스트 모드에서는 자동화를 시작할 수 없습니다.');
-    if (enabled) await deps.eligibility.assertAutomationReady();
+    if (enabled) { const error=codexModelSelectionError((await deps.settings.read()).codex.model); if(error)throw new Error(error); await deps.eligibility.assertAutomationReady(); }
     const current = await deps.settings.read();
     await deps.settings.save({ ...current, schedulerEnabled: enabled });
     let cancelled:number;let scheduled=0;
@@ -514,6 +530,12 @@ export function registerIpc(deps: Dependencies): void {
     return {running:deps.scheduler.isRunning(),cancelled,scheduled,pendingJobCount:deps.repositories.pendingJobs().length};
   });
   handle('automation:cancel', z.string().min(1).max(500), (id) => deps.repositories.cancelJob(id));
+  handle('automation:stop-account', z.string().uuid(), (accountId) => {
+    if(!deps.repositories.getAccount(accountId))throw new Error('중지할 계정을 찾을 수 없습니다.');
+    deps.pipeline.stopComments(accountId);
+    const cancelled=deps.scheduler.stopAccount(accountId);
+    return {cancelled};
+  });
   handle('automation:update-promotion-type', promotionScheduleUpdateSchema, async ({jobId,accountId,sourceType}) => {
     const account=deps.repositories.getAccount(accountId);
     if(!account)throw new Error('예약 계정을 찾을 수 없습니다.');
@@ -593,6 +615,7 @@ export function registerIpc(deps: Dependencies): void {
   });
   handle('content:publish-now', immediatePublishSchema, async ({accountId,sourceType}) => {
     if(deps.safeUiTestMode)throw new Error('안전 UI 테스트 모드에서는 실제 Threads 즉시 발행을 실행할 수 없습니다.');
+    const modelError=codexModelSelectionError((await deps.settings.read()).codex.model);if(modelError)throw new Error(modelError);
     const account=deps.repositories.getAccount(accountId);
     if(!account)throw new Error('즉시 발행할 계정을 찾을 수 없습니다.');
     if(!account.active)throw new Error(`${account.name} 계정이 비활성 상태입니다. 계정 운영을 활성화하세요.`);

@@ -7,6 +7,7 @@ import { composeCoupangPost, coupangCreativeFromStoredBody } from '../services/c
 import { composeNaverBrandPost, naverBrandCreativeFromStoredBody } from '../services/naver-brand-compliance';
 
 export const SCHEDULE_REBUILD_REASON = '자동화 일정 재생성을 위해 예정 작업을 취소했습니다.';
+export const ACCOUNT_AUTOMATION_STOP_REASON = '계정 자동화 중지';
 export const GLOBAL_AUTOMATION_STOP_REASON = '전체 자동화가 중지되어 예정 작업을 취소했습니다.';
 const PROGRAM_EXIT_CANCELLATION_REASON = '프로그램 종료로 작업이 취소되었습니다.';
 
@@ -100,6 +101,8 @@ function pipelineRunFromRow(row: any): PipelineRunView {
   });
   return {
     id:row.id, accountId:row.account_id, jobId:row.job_id ?? undefined, postId:row.post_id ?? undefined, mode:row.mode,
+    aiCalls:Number(row.ai_calls ?? 0),aiMeasuredCalls:Number(row.ai_measured_calls ?? 0),
+    aiInputTokens:Number(row.ai_input_tokens ?? 0),aiOutputTokens:Number(row.ai_output_tokens ?? 0),
     postDeletedAt:row.post_deleted_at ?? undefined,
     collectedCommentCount:Number(row.collected_comment_count??0),threadsPostId:row.remote_post_id??undefined,
     status:row.status, stage:row.stage, progress:row.progress, message:row.message,
@@ -965,11 +968,11 @@ export class Repositories {
       VALUES (?, ?, ?, 'PENDING', ?, 0, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET status='PENDING',run_at=excluded.run_at,attempt=0,payload_json=excluded.payload_json,
         last_error=NULL,updated_at=excluded.updated_at
-      WHERE (jobs.status='CANCELLED' AND jobs.last_error IN (?,?,?))
+      WHERE (jobs.status='CANCELLED' AND jobs.last_error IN (?,?,?,?))
         OR (jobs.status='PENDING' AND (jobs.run_at<>excluded.run_at OR jobs.payload_json<>excluded.payload_json))
         OR (?=1 AND jobs.kind='PUBLISH' AND jobs.status='CANCELLED' AND jobs.last_error='사용자가 예정 Job을 취소했습니다.')
     `).run(job.id, job.accountId, job.kind, job.runAt, JSON.stringify(payload), now, now,
-      PROGRAM_EXIT_CANCELLATION_REASON,SCHEDULE_REBUILD_REASON,GLOBAL_AUTOMATION_STOP_REASON,
+      PROGRAM_EXIT_CANCELLATION_REASON,SCHEDULE_REBUILD_REASON,GLOBAL_AUTOMATION_STOP_REASON,ACCOUNT_AUTOMATION_STOP_REASON,
       options.reviveUserCancelledPublish ? 1 : 0);
     return result.changes === 1;
   }
@@ -1102,6 +1105,13 @@ export class Repositories {
     return run;
   }
 
+  recordPipelineAiCall(id:string, usage?:{input:number;output:number}):void {
+    if(usage) this.db.raw.prepare('UPDATE pipeline_runs SET ai_measured_calls=ai_measured_calls+1, ai_input_tokens=ai_input_tokens+?, ai_output_tokens=ai_output_tokens+? WHERE id=?').run(usage.input,usage.output,id);
+    else this.db.raw.prepare('UPDATE pipeline_runs SET ai_calls=ai_calls+1 WHERE id=?').run(id);
+    const run=this.getPipelineRun(id);
+    if(run)this.pipelineListeners.forEach(listener=>listener(run));
+  }
+
   updatePipelineRun(id: string, patch: { status?:PipelineStatus; stage?:PipelineStage; progress?:number; message?:string; errorSummary?:string|null; sourceId?:string|null; postId?:string|null; draftBody?:string|null; quality?:PipelineQualityDecision[]; finishedAt?:string|null }): PipelineRunView {
     const current = this.getPipelineRun(id);
     if (!current) throw new Error('Pipeline 작업을 찾을 수 없습니다.');
@@ -1133,6 +1143,16 @@ export class Repositories {
     const sql = `SELECT r.*,(SELECT p.threads_post_id FROM posts p WHERE p.id=r.post_id) remote_post_id,(SELECT COUNT(*) FROM comments c JOIN posts p ON p.threads_post_id=c.post_id AND p.account_id=c.account_id WHERE p.id=r.post_id) collected_comment_count,(SELECT p.remote_deleted_at FROM posts p WHERE p.id=r.post_id) post_deleted_at,s.source_type,s.source_url,s.published_at source_published_at,s.metadata_json source_metadata_json
       FROM pipeline_runs r LEFT JOIN sources s ON s.id=r.source_id ${accountId ? 'WHERE r.account_id=?' : ''} ORDER BY COALESCE(r.finished_at,r.updated_at) DESC,r.id DESC LIMIT ? OFFSET ?`;
     const rows = accountId ? this.db.raw.prepare(sql).all(accountId, limit, offset) : this.db.raw.prepare(sql).all(limit, offset);
+    return rows.map(pipelineRunFromRow);
+  }
+
+  listScheduledPublicationHistory(limit=100):PipelineRunView[] {
+    const rows=this.db.raw.prepare(`SELECT r.*,(SELECT p.threads_post_id FROM posts p WHERE p.id=r.post_id) remote_post_id,
+      (SELECT p.remote_deleted_at FROM posts p WHERE p.id=r.post_id) post_deleted_at,
+      s.source_type,s.source_url,s.published_at source_published_at,s.metadata_json source_metadata_json
+      FROM pipeline_runs r LEFT JOIN sources s ON s.id=r.source_id
+      WHERE r.mode='PUBLISH' AND r.job_id IS NOT NULL AND r.status IN ('COMPLETED','FAILED','REJECTED','STOPPED')
+      ORDER BY COALESCE(r.finished_at,r.updated_at) DESC,r.id DESC LIMIT ?`).all(limit);
     return rows.map(pipelineRunFromRow);
   }
 

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, powerMonitor } from 'electron';
+import { app, BrowserWindow, dialog, Menu, powerMonitor, Tray } from 'electron';
 import started from 'electron-squirrel-startup';
 import type { CredentialKey } from '../shared/domain';
 import { POLICY } from '../shared/policy';
@@ -59,6 +59,7 @@ const primaryInstance=safeUiTestMode||app.requestSingleInstanceLock();
 if(!primaryInstance)app.quit();
 
 let mainWindow: BrowserWindow | undefined;
+let tray: Tray | undefined;
 let quitting = false;
 app.on('second-instance',()=>{if(!mainWindow)return;mainWindow.show();if(mainWindow.isMinimized())mainWindow.restore();mainWindow.focus();});
 
@@ -200,6 +201,33 @@ async function createApplication(): Promise<void> {
       preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
   });
+  const showMainWindow = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  };
+  try {
+    tray = new Tray(appIconPath);
+    tray.setToolTip('스레드 자동화');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '프로그램 열기', click: showMainWindow },
+      { type: 'separator' },
+      { label: '완전 종료', click: async () => {
+        const result = await dialog.showMessageBox({
+          type: 'question', title: '스레드 자동화 종료',
+          message: '프로그램을 완전히 종료하시겠습니까?',
+          detail: '종료하면 자동발행이 중단됩니다.',
+          buttons: ['취소', '완전 종료'], defaultId: 0, cancelId: 0, noLink: true,
+        });
+        if (result.response === 1) app.quit();
+      } },
+    ]));
+    tray.on('double-click', showMainWindow);
+  } catch (error) {
+    tray = undefined;
+    console.error('TRAY_INITIALIZATION_FAILED', error);
+  }
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   mainWindow.webContents.on('did-fail-load',(_event,code,description,url,isMainFrame)=>{
@@ -346,12 +374,17 @@ async function createApplication(): Promise<void> {
     usage.stop();
     database.close();
   };
-  mainWindow.on('close', () => {
+  mainWindow.on('close', (event) => {
     if (quitting) return;
+    if (tray) {
+      event.preventDefault();
+      mainWindow?.hide();
+      return;
+    }
     quitting = true;
     cleanup();
   });
-  app.on('before-quit', () => { quitting = true; cleanup(); });
+  app.on('before-quit', () => { quitting = true; tray?.destroy(); tray = undefined; cleanup(); });
 }
 
 app.whenReady().then(async () => {

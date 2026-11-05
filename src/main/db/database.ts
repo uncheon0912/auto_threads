@@ -321,6 +321,10 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN threads_token_check_failed_at TEXT;`,
   `ALTER TABLE accounts ADD COLUMN comments_enabled INTEGER NOT NULL DEFAULT 1 CHECK(comments_enabled IN (0,1));`,
   `ALTER TABLE accounts ADD COLUMN writing_instructions TEXT NOT NULL DEFAULT '';`,
+  `ALTER TABLE pipeline_runs ADD COLUMN ai_calls INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE pipeline_runs ADD COLUMN ai_measured_calls INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE pipeline_runs ADD COLUMN ai_input_tokens INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE pipeline_runs ADD COLUMN ai_output_tokens INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export class AppDatabase {

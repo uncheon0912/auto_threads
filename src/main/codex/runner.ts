@@ -7,6 +7,7 @@ import type { AgentResult, AgentRole, CodexHealth, CodexSettings } from '../../s
 import { POLICY } from '../../shared/policy';
 import { agentResultJsonSchema, agentResultSchema } from './schemas';
 import { codexProcessEnvironment } from './environment';
+import { codexModelArgs } from '../../shared/2026-11-04-codex-models';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,26 +25,39 @@ export async function findWindowsCodexExecutable(env:NodeJS.ProcessEnv=process.e
   const exists=async(file:string)=>{try{return (await fs.stat(file)).isFile();}catch(error){if(['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))return false;throw error;}};
   const directories=(env.PATH??env.Path??'').split(path.delimiter).map(entry=>entry.trim().replace(/^"(.*)"$/,'$1')).filter(Boolean);
   if(env.APPDATA)directories.push(path.join(env.APPDATA,'npm'));
-  for(const directory of directories){const candidate=path.join(directory,'codex.exe');if(await exists(candidate))return candidate;}
+  const candidates:string[]=[];
+  for(const directory of directories){const candidate=path.join(directory,'codex.exe');if(await exists(candidate))candidates.push(candidate);}
   if(env.APPDATA){
     const target=arch==='arm64'?'aarch64-pc-windows-msvc':'x86_64-pc-windows-msvc';
     const candidate=path.join(env.APPDATA,'npm','node_modules','@openai','codex','node_modules','@openai',`codex-win32-${arch==='arm64'?'arm64':'x64'}`,'vendor',target,'bin','codex.exe');
-    if(await exists(candidate))return candidate;
+    if(await exists(candidate))candidates.push(candidate);
   }
   // 데스크톱 업데이트로 버전 폴더가 바뀌어도 오래된 사용자 PATH에 의존하지 않는다.
   if(env.LOCALAPPDATA){
     const root=path.join(env.LOCALAPPDATA,'OpenAI','Codex','bin');
-    if(await exists(path.join(root,'codex.exe')))return path.join(root,'codex.exe');
+    if(await exists(path.join(root,'codex.exe')))candidates.push(path.join(root,'codex.exe'));
     const entries=await fs.readdir(root,{withFileTypes:true}).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error;});
-    const candidates:Array<{file:string;modified:number}>=[];
     for(const entry of entries.filter(entry=>entry.isDirectory())){
       const file=path.join(root,entry.name,'codex.exe');
-      if(await exists(file))candidates.push({file,modified:(await fs.stat(file)).mtimeMs});
+      if(await exists(file))candidates.push(file);
     }
-    candidates.sort((a,b)=>b.modified-a.modified||a.file.localeCompare(b.file));
-    if(candidates[0])return candidates[0].file;
   }
+  const versions=await Promise.all([...new Set(candidates)].map(async file=>{
+    try {const result=await execFileAsync(file,['--version'],{windowsHide:true,timeout:5000,maxBuffer:4096,env});return {file,version:result.stdout};}
+    catch{return {file,version:''};}
+  }));
+  versions.sort((a,b)=>compareCodexVersions(b.version,a.version));
+  if(versions[0])return versions[0].file;
   throw Object.assign(new Error('Codex CLI가 설치되어 있지 않습니다. PATH와 표준 설치 위치를 자동 탐색했지만 실행 파일이 없습니다.'),{code:'ENOENT'});
+}
+
+export function compareCodexVersions(left:string,right:string):number {
+  const parse=(value:string)=>{const m=value.match(/(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?/);return m?{numbers:m.slice(1,4).map(Number),pre:m[4]}:undefined;};
+  const a=parse(left),b=parse(right);
+  if(!a||!b)return a?1:b?-1:0;
+  for(let i=0;i<3;i++){const difference=a.numbers[i]-b.numbers[i];if(difference)return difference;}
+  if(!a.pre||!b.pre)return a.pre? -1:b.pre?1:0;
+  return a.pre.localeCompare(b.pre,undefined,{numeric:true});
 }
 
 export interface AgentInvocation {
@@ -97,6 +111,17 @@ export class CodexRunner {
     this.executable=await this.resolveExecutable();return this.executable;
   }
 
+  async login(): Promise<void> {
+    const executable = await this.executablePath();
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(executable, ['login'], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: codexProcessEnvironment() });
+      child.stdout.resume(); child.stderr.resume();
+      const timer = setTimeout(() => { child.kill(); reject(new Error('로그인 시간이 초과되었습니다. 다시 시도해 주세요.')); }, 180_000);
+      child.once('error', () => { clearTimeout(timer); reject(new Error('Codex 로그인 실행에 실패했습니다.')); });
+      child.once('close', (code) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error('Codex 로그인이 완료되지 않았습니다.')); });
+    });
+  }
+
   private async resolveExecutable(): Promise<string> {
     if (process.platform === 'win32') return findWindowsCodexExecutable();
     return findPosixCodexExecutable();
@@ -132,6 +157,7 @@ export class CodexRunner {
 
   async run(invocation: AgentInvocation): Promise<AgentInvocationResult> {
     invocation.signal?.throwIfAborted();
+    const modelArgs = codexModelArgs(invocation.settings.model);
     const executable = await this.executablePath();
     invocation.signal?.throwIfAborted();
     const args = [
@@ -141,7 +167,7 @@ export class CodexRunner {
       '-c', `web_search="${invocation.webSearch ? 'live' : 'disabled'}"`,
       '--output-schema', this.schemaPath, '--color', 'never', '-C', this.workDirectory,
     ];
-    if (invocation.settings.model !== 'Default') args.push('--model', invocation.settings.model);
+    args.push(...modelArgs);
     args.push('-');
 
     return await new Promise((resolve, reject) => {
@@ -174,9 +200,11 @@ export class CodexRunner {
           if (event.type === 'error' && typeof event.message === 'string') failureMessage = event.message.slice(0, 4_000);
           if (event.type === 'turn.failed' && typeof event.error?.message === 'string') failureMessage = event.error.message.slice(0, 4_000);
           if (event.type === 'turn.completed' && event.usage) {
+            const input=event.usage.input_tokens ?? event.usage.inputTokens;
+            const output=event.usage.output_tokens ?? event.usage.outputTokens;
             usage = {
-              input: Number(event.usage.input_tokens ?? event.usage.inputTokens ?? 0),
-              output: Number(event.usage.output_tokens ?? event.usage.outputTokens ?? 0),
+              input: typeof input==='number' && Number.isFinite(input) && input>=0 ? input : undefined,
+              output: typeof output==='number' && Number.isFinite(output) && output>=0 ? output : undefined,
             };
           }
         } catch { /* 알 수 없는 JSONL 행은 최종 Schema 결과에 영향을 주지 않는다. */ }
@@ -197,7 +225,11 @@ export class CodexRunner {
         this.activeChildren.delete(child);
         if (settled) return;
         parseLine(buffer);
-        if (code !== 0) return finishError(new Error(`Codex Agent 실행 실패 (${code}): ${failureMessage || stderr.trim() || '상세 정보 없음'}`));
+        if (code !== 0) {
+          const detail = failureMessage || stderr.trim() || '상세 정보 없음';
+          if (/model_not_found|model is not supported/i.test(detail)) return finishError(new Error(`선택한 모델(${invocation.settings.model}) 요청을 Codex가 거부했습니다. 모델 목록에 표시되어도 계정 권한 또는 CLI 연결에 따라 실행이 제한될 수 있습니다. Codex 로그인과 CLI 버전을 확인하거나 다른 모델을 선택해 주세요.`));
+          return finishError(new Error(`Codex Agent 실행 실패 (${code}): ${detail}`));
+        }
         try {
           const parsed = agentResultSchema.parse(JSON.parse(finalText));
           settled = true;

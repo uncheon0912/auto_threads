@@ -1,10 +1,10 @@
 import type { Account, JobActivity, JobRecord, JobStatus, SourceType } from '../../shared/domain';
 import { POLICY } from '../../shared/policy';
-import { GLOBAL_AUTOMATION_STOP_REASON, SCHEDULE_REBUILD_REASON, type Repositories } from '../db/repositories';
+import { ACCOUNT_AUTOMATION_STOP_REASON, GLOBAL_AUTOMATION_STOP_REASON, SCHEDULE_REBUILD_REASON, type Repositories } from '../db/repositories';
 import { ProviderRequestError, UncertainRemoteOperationError } from '../providers/contracts';
 import type { PublishEligibility } from './publish-eligibility';
 
-export interface JobHandler { execute(job: JobRecord, account: Account): Promise<void> }
+export interface JobHandler { execute(job: JobRecord, account: Account, canPublish?: () => boolean, signal?:AbortSignal): Promise<void|'STOPPED'> }
 
 export interface PlannedPublishSlot {
   accountId: string;
@@ -18,6 +18,7 @@ export interface SuccessfulPublicationHistory { daily:number; promotion:number; 
 type PromotionSourceType=Exclude<SourceType,'DAILY'>;
 const MAX_TIMER_DELAY_MS=2_147_000_000;
 const HOUR_MS=60*60_000;
+const START_DELAY_MS=30*60_000;
 
 const minutesOfDay = (value: string): number => {
   const [hours, minutes] = value.split(':').map(Number);
@@ -113,9 +114,13 @@ export function isRetryableJobError(error: unknown): boolean {
 export class AutomationScheduler {
   private timer?: NodeJS.Timeout;
   private running = false;
+  private runGeneration = 0;
+  private readonly accountStopGeneration = new Map<string,number>();
+  private readonly activePublications = new Map<string,{accountId:string;controller:AbortController}>();
   private workerBusy = false;
   private recurringAccounts:Account[]=[];
   private scheduleQueue:Promise<void> = Promise.resolve();
+  private publicationNotBefore?:Date;
   private readonly activityListeners = new Set<(activity: JobActivity) => void>();
 
   constructor(
@@ -182,6 +187,8 @@ export class AutomationScheduler {
   }
 
   pause(): void {
+    this.runGeneration++;
+    for(const {controller} of this.activePublications.values())controller.abort();
     this.running = false;
     this.clearWakeTimer();
     this.recurringAccounts=[];
@@ -196,6 +203,7 @@ export class AutomationScheduler {
 
   async rebuildSchedules(now = new Date(), options:{reviveUserCancelledPublish?:boolean}={}):Promise<{cancelled:number;scheduled:number}> {
     const result=await this.serializeSchedule(async()=>{
+      this.publicationNotBefore=new Date(now.getTime()+START_DELAY_MS);
       const cancelled=this.repositories.cancelPendingScheduledJobs(undefined,SCHEDULE_REBUILD_REASON);
       const scheduled=await this.scheduleAccounts(now,options);
       this.repositories.addLog('INFO','SCHEDULER',`발행 계획을 다시 생성했습니다. 기존 ${cancelled}건 취소 · 새 계획 ${scheduled}건`);
@@ -225,6 +233,16 @@ export class AutomationScheduler {
       this.repositories.addLog('INFO','SCHEDULER',`전체 자동화를 중지하고 예정 작업 ${cancelled}건을 취소했습니다.`);
       return cancelled;
     });
+  }
+
+  stopAccount(accountId:string):number {
+    this.accountStopGeneration.set(accountId,(this.accountStopGeneration.get(accountId)??0)+1);
+    for(const active of this.activePublications.values())if(active.accountId===accountId)active.controller.abort();
+    this.repositories.disableAutomationTarget(accountId);
+    const cancelled=this.repositories.cancelPendingScheduledJobs(accountId,ACCOUNT_AUTOMATION_STOP_REASON);
+    this.repositories.addLog('INFO','SCHEDULER',`이 계정의 자동화를 중지하고 예정 작업 ${cancelled}건을 취소했습니다.`,undefined,accountId);
+    if(this.running)this.armNextWake();
+    return cancelled;
   }
 
   async tick(now = new Date()): Promise<void> {
@@ -260,7 +278,8 @@ export class AutomationScheduler {
     const day = now.toLocaleDateString('sv-SE');
     const successfulHistory=Object.fromEntries(eligibleAccounts.map((account)=>[account.id,this.repositories.successfulPublicationScheduleHistory(account.id,day)]));
     let scheduled=0;
-    const currentPlans=planDailyPublishSlots(eligibleAccounts,now,successfulHistory,now);
+    const notBefore=new Date(Math.max(now.getTime(),this.publicationNotBefore?.getTime()??0));
+    const currentPlans=planDailyPublishSlots(eligibleAccounts,now,successfulHistory,notBefore);
     const plans=[...currentPlans];
     // 오늘 남은 슬롯 유무와 관계없이 모든 계정의 다음 운영일을 함께 확보한다.
     // 같은 날짜의 계정을 한 번에 계획해야 accountIndex 오프셋이 적용되어 시간순으로 교차된다.
@@ -282,7 +301,7 @@ export class AutomationScheduler {
         }
         return [account.id,history];
       }));
-      plans.push(...planDailyPublishSlots(group.accounts,group.day,nextHistory));
+      plans.push(...planDailyPublishSlots(group.accounts,group.day,nextHistory,notBefore));
     }
     const sourceOptions=new Map<string,PromotionSourceType[]>();
     const manualCoupangCapacity=new Map<string,number>();
@@ -385,6 +404,8 @@ export class AutomationScheduler {
   }
 
   private async executeClaimed(job: JobRecord): Promise<void> {
+    const generation=this.runGeneration;
+    const accountGeneration=this.accountStopGeneration.get(job.accountId)??0;
     const account = this.repositories.getAccount(job.accountId);
     if (!account?.active || !account.automationTarget) {
       this.repositories.completeJob(job.id, 'DONE');
@@ -415,10 +436,21 @@ export class AutomationScheduler {
     }
     this.emitActivity(job, 'RUNNING', '작업을 시작했습니다.');
     try {
-      await this.handler.execute(job, account);
+      const controller=new AbortController();
+      if(job.kind==='PUBLISH')this.activePublications.set(job.id,{accountId:job.accountId,controller});
+      if(!this.running||generation!==this.runGeneration||accountGeneration!==(this.accountStopGeneration.get(job.accountId)??0))controller.abort();
+      let result:void|'STOPPED';
+      try { result=await this.handler.execute(job, account, () => this.running && generation===this.runGeneration && accountGeneration===(this.accountStopGeneration.get(job.accountId)??0),controller.signal); }
+      finally { this.activePublications.delete(job.id); }
+      if(result==='STOPPED'){this.repositories.completeJob(job.id,'CANCELLED','자동화 중지');this.emitActivity(job,'CANCELLED','자동화가 중지되어 발행하지 않았습니다.');return;}
       this.repositories.completeJob(job.id, 'DONE');
       this.emitActivity(job, 'DONE', '작업을 완료했습니다.');
     } catch (error) {
+      if(job.kind==='PUBLISH' && !(error instanceof UncertainRemoteOperationError) && (!this.running || generation!==this.runGeneration || accountGeneration!==(this.accountStopGeneration.get(job.accountId)??0))){
+        this.repositories.completeJob(job.id,'CANCELLED','자동화 중지');
+        this.emitActivity(job,'CANCELLED','자동화가 중지되어 발행 작업을 취소했습니다.');
+        return;
+      }
       if(job.kind==='COMMENTS'&&!this.repositories.getAccount(job.accountId)?.commentsEnabled){
         this.repositories.completeJob(job.id,'CANCELLED','계정 자동 댓글 중지');
         this.emitActivity(job,'CANCELLED','이 계정의 자동 댓글을 중지했습니다.');
