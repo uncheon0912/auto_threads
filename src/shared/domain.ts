@@ -185,6 +185,7 @@ export interface CoupangProductQueueItem {
   imageUrl?: string;
   imageUrls: string[];
   media: MediaAsset[];
+  excludedImages?: Array<{url:string;position:number;reason?:'unverified'}>;
   productFacts: string[];
   researchSourceUrls: string[];
   reviewEvidence: CoupangReviewEvidence[];

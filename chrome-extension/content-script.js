@@ -1,4 +1,4 @@
-/* global chrome, console, TextEncoder, URL, document, location, setTimeout */
+/* global chrome, console, TextEncoder, URL, document, location, setTimeout, Image */
 'use strict';
 
 (() => {
@@ -47,7 +47,6 @@
       url.username = '';
       url.password = '';
       url.hash = '';
-      url.pathname = url.pathname.replace(/\/(?:48x48|96x96|230x230|292x292|492x492)ex\//i, '/492x492ex/');
       return url.toString();
     } catch {
       return null;
@@ -69,6 +68,20 @@
       || image.getAttribute('data-src')
       || image.currentSrc
       || image.src;
+  }
+
+  async function verifyImageQuality(urls) {
+    const probes=await Promise.all(urls.map(url=>new Promise(resolve=>{
+      const image=new Image();let finished=false;
+      const done=state=>{if(finished)return;finished=true;resolve({url,state});};
+      image.onload=()=>done(Math.min(image.naturalWidth,image.naturalHeight)>=600?'accepted':'too_small');
+      image.onerror=()=>done('unknown');
+      setTimeout(()=>done('unknown'),6000);
+      image.referrerPolicy='no-referrer';image.src=url;
+    })));
+    return {imageUrls:probes.filter(item=>item.state==='accepted').map(item=>item.url),
+      unknownImageUrls:probes.filter(item=>item.state==='unknown').map(item=>item.url),
+      rejectedImageCount:probes.filter(item=>item.state==='too_small').length,qualityChecked:true};
   }
 
   function collectImages(maxImages) {
@@ -227,7 +240,8 @@
     }
     const denied = restriction();
     if (denied) throw Object.assign(new Error(denied.message), { code: denied.code });
-    const imageUrls = await waitForProductImages(request.maxImages);
+    const quality = await verifyImageQuality(await waitForProductImages(request.maxImages));
+    if(!quality.imageUrls.length&&!quality.unknownImageUrls.length){const error=new Error(`600픽셀 이상 이미지를 확인하지 못했습니다. 작은 이미지 ${quality.rejectedImageCount}장입니다.`);error.code='IMAGE_QUALITY_UNAVAILABLE';throw error;}
     const reviewSection = await waitForReviewSection();
     if (reviewSection) {
       reviewSection.scrollIntoView({ block: 'start', behavior: 'auto' });
@@ -240,7 +254,7 @@
       ...(identity.itemId ? { itemId: identity.itemId } : {}),
       ...(identity.vendorItemId ? { vendorItemId: identity.vendorItemId } : {}),
       productTitleRaw: productTitle(),
-      imageUrls,
+      ...quality,
       reviews,
       collectedAt: new Date().toISOString()
     };
@@ -341,8 +355,9 @@
   async function collectNaverPage(request) {
     const identity=currentNaverIdentity();
     if(!identity||identity.productKey!==request.productKey){const error=new Error('열린 네이버 상품 페이지가 요청한 상품과 일치하지 않습니다.');error.code='PRODUCT_IDENTITY_MISMATCH';throw error;}
-    const imageUrls=await waitForNaverImages(request.maxImages);
-    const result={productKey:identity.productKey,productTitleRaw:identity.travel?compact(document.querySelector('h1')?.textContent):productTitle(),imageUrls,
+    const quality=await verifyImageQuality(await waitForNaverImages(request.maxImages));
+    if(!quality.imageUrls.length&&!quality.unknownImageUrls.length){const error=new Error(`600픽셀 이상 이미지를 확인하지 못했습니다. 작은 이미지 ${quality.rejectedImageCount}장입니다.`);error.code='IMAGE_QUALITY_UNAVAILABLE';throw error;}
+    const result={productKey:identity.productKey,productTitleRaw:identity.travel?compact(document.querySelector('h1')?.textContent):productTitle(),...quality,
       reviews:identity.travel?[]:collectNaverReviews(request.maxReviews),productFacts:collectNaverFacts(),collectedAt:new Date().toISOString()};
     if(byteLength(result)>MAX_MESSAGE_BYTES){const error=new Error('상품 수집 결과가 허용된 메시지 크기를 초과했습니다.');error.code='MESSAGE_TOO_LARGE';throw error;}
     return result;

@@ -79,6 +79,14 @@ async function createApplication(): Promise<void> {
       operationStart:'09:00', operationEnd:'21:00', weekdays:[0,1,2,3,4,5,6], commentsEnabled:true, commentIntervalMinutes:10, fixedLinkEnabled:false, fixedLinkUrl:'',
     });
     repositories.saveProviderConfig({accountId:uiAccount.id,type:'COUPANG',enabled:true,config:{schemaVersion:1,mode:'MANUAL_LINKS',keywords:'개발자 책상, 생활용품',rocketOnly:true,rocketFreshOnly:false,goldBoxOnly:false}});
+    if(process.env.THREADS_AUTO_UI_ACTION==='product-management'){
+      const urls=['https://example.com/one.jpg','https://example.com/two.jpg','https://example.com/three.jpg'];
+      const item=repositories.createCoupangLink({accountId:uiAccount.id,originalInputType:'PLAIN_LINK',affiliateUrl:'https://example.com/product',urlFingerprint:'ui-product',metadataStatus:'READY',productName:'UI 테스트 상품',imageUrls:urls});
+      database.raw.prepare('INSERT INTO sources(id,account_id,source_type,source_key,created_at) VALUES (?,?,?,?,?)').run('ui-source',uiAccount.id,'COUPANG','ui-source',new Date().toISOString());
+      repositories.savePost({id:'ui-product-post',accountId:uiAccount.id,sourceType:'COUPANG',body:'테스트 본문',imageUrls:urls,createdAt:new Date().toISOString()});
+      database.raw.prepare("UPDATE coupang_link_queue SET status='PREVIEW_READY',active_source_id='ui-source',draft_post_id='ui-product-post' WHERE id=?").run(item.id);
+      repositories.createCoupangLink({accountId:uiAccount.id,originalInputType:'PLAIN_LINK',affiliateUrl:'https://example.com/failure',urlFingerprint:'ui-failure',metadataStatus:'FAILED',productName:'UI 검토 필요 상품'});
+    }
     const publishedAt=new Date().toISOString();
     repositories.savePost({id:'00000000-0000-4000-8000-000000000099',accountId:uiAccount.id,sourceType:'DAILY',body:'UI 검증용 게시물',threadsPostId:'ui-test-post',createdAt:publishedAt,publishedAt});
     repositories.upsertInsights('00000000-0000-4000-8000-000000000099',{views:120,likes:14,replies:3,reposts:2,quotes:1,shares:4});
@@ -249,14 +257,15 @@ async function createApplication(): Promise<void> {
     await new Promise((resolve)=>setTimeout(resolve,500));
     const uiPage=process.env.THREADS_AUTO_UI_PAGE;
     if(['coupang','naver-brand','accounts','report'].includes(uiPage??'')){
-      const pageTitle=uiPage==='naver-brand'?'네이버 브랜드 커넥트':uiPage==='accounts'?'계정 관리':uiPage==='report'?'성과 리포트':'쿠팡 상품';
+      const pageTitle=uiPage==='naver-brand'?'네이버 브랜드 커넥트':uiPage==='accounts'?'계정 관리':uiPage==='report'?'성과 리포트':'쿠팡 파트너스';
       await mainWindow.webContents.executeJavaScript(`document.querySelector('button[title=${JSON.stringify(pageTitle)}]')?.click()`);
     }
     const uiAccount=process.env.THREADS_AUTO_UI_ACCOUNT?.trim();
     if(uiAccount){
       await new Promise((resolve)=>setTimeout(resolve,500));
-      const accountSelectId=uiPage==='naver-brand'?'naver-brand-account':'coupang-account';
-      await mainWindow.webContents.executeJavaScript(`(()=>{const select=document.querySelector(${JSON.stringify(`#${accountSelectId}`)});if(!(select instanceof HTMLSelectElement))return false;const option=[...select.options].find((item)=>item.textContent?.trim()===${JSON.stringify(uiAccount)});if(!option)return false;select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`);
+      await mainWindow.webContents.executeJavaScript("document.querySelector('.global-account-trigger')?.click()");
+      await new Promise((resolve)=>setTimeout(resolve,200));
+      await mainWindow.webContents.executeJavaScript(`(()=>{const button=[...document.querySelectorAll('.global-account-results button')].find(item=>item.querySelector('strong')?.textContent?.trim()===${JSON.stringify(uiAccount)});if(!(button instanceof HTMLButtonElement))return false;button.click();return true;})()`);
     }
     if(process.env.THREADS_AUTO_UI_ACTION==='coupang-search'){
       await new Promise((resolve)=>setTimeout(resolve,800));
@@ -270,6 +279,30 @@ async function createApplication(): Promise<void> {
       await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-queue-item summary')?.click()`);
       await new Promise((resolve)=>setTimeout(resolve,500));
       await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-queue-item[open] .coupang-item-actions')?.scrollIntoView({block:'center'})`);
+    }
+    if(safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='product-management'){
+      await new Promise((resolve)=>setTimeout(resolve,1000));
+      const result=await mainWindow.webContents.executeJavaScript(`(async()=>{
+        const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+        document.querySelector('.coupang-queue-item summary')?.click();await delay(100);
+        document.querySelector('input[aria-label="이미지 1 제외 선택"]')?.click();
+        [...document.querySelectorAll('button')].find(button=>button.textContent?.startsWith('선택한 이미지 제외'))?.click();await delay(400);
+        document.querySelector('.coupang-queue-item summary')?.click();await delay(100);
+        const excludedCount=document.querySelectorAll('.coupang-queue-item[open] input[aria-label*="제외 선택"]').length;
+        document.querySelector('.coupang-gallery details summary')?.click();
+        document.querySelector('input[aria-label="제외된 이미지 1 복원 선택"]')?.click();
+        [...document.querySelectorAll('button')].find(button=>button.textContent?.startsWith('선택한 이미지 복원'))?.click();await delay(400);
+        document.querySelector('.coupang-queue-item summary')?.click();await delay(100);
+        const restoredCount=document.querySelectorAll('.coupang-queue-item[open] input[aria-label*="제외 선택"]').length;
+        document.querySelector('.product-trash-list input')?.click();
+        [...document.querySelectorAll('button')].find(button=>button.textContent?.startsWith('선택 상품 삭제'))?.click();await delay(400);
+        document.querySelector('.product-trash-manager details summary')?.click();
+        const restore=[...document.querySelectorAll('.product-trash-row button')].find(button=>button.textContent?.trim()==='복원');
+        const hasRestore=Boolean(restore);restore?.click();await delay(400);
+        return {hasRestore,reviewCount:document.querySelectorAll('.product-trash-list input').length,excludedCount,restoredCount};
+      })()`);
+      console.log(`PRODUCT_MANAGEMENT_UI_TEST=${JSON.stringify(result)}`);
+      if(!result.hasRestore||result.reviewCount!==1||result.excludedCount!==2||result.restoredCount!==3)throw new Error('이미지·상품 복원 UI 검증에 실패했습니다.');
     }
     if(process.env.THREADS_AUTO_UI_ACTION==='account-coupang-key-label'){
       await new Promise((resolve)=>setTimeout(resolve,500));

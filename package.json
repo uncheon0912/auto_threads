@@ -3,7 +3,7 @@
   "productName": "Threads Auto",
   "version": "0.1.0-beta.3",
   "description": "Codex CLI 기반 멀티 계정 스레드 자동화 도구",
-  "author": "복사장",
+  "author": "부자사람연구소",
   "license": "MIT",
   "main": ".vite/build/main.js",
   "private": true,

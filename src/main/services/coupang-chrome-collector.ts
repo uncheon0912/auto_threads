@@ -50,10 +50,12 @@ type StoredState={promptAcknowledged?:boolean;lastConnectedAt?:string;extensionV
 type CollectorReview={reviewTextRaw:string;optionTextRaw?:string;rating?:number};
 export interface CoupangChromeCollectionResult {
   finalUrl:string;productId:string;itemId?:string;vendorItemId?:string;productTitleRaw?:string;imageUrls:string[];
+  unknownImageUrls:string[];
   reviews:CollectorReview[];collectedAt:string;
 }
 export interface NaverBrandChromeCollectionResult {
   finalUrl:string;productKey:string;productTitleRaw?:string;imageUrls:string[];
+  unknownImageUrls:string[];
   reviews:CollectorReview[];productFacts:string[];collectedAt:string;
 }
 
@@ -269,28 +271,30 @@ export class CoupangChromeCollectorService {
 
   private parseProduct(value:unknown):CoupangChromeCollectionResult{
     if(!isRecord(value))throw new CoupangChromeCollectorError('INVALID_PRODUCT_RESULT','수집된 상품 정보 형식이 올바르지 않습니다.');
+    if(value.qualityChecked!==true)throw new CoupangChromeCollectorError('COLLECTOR_UPDATE_REQUIRED','이미지 품질 확인을 위해 Chrome 확장프로그램을 새로고침하세요.');
     const location=collectedLocation(value.finalUrl);
     if(!location||value.productId!==location.productId||value.itemId!==location.itemId||value.vendorItemId!==location.vendorItemId)throw new CoupangChromeCollectorError('PRODUCT_IDENTITY_MISMATCH','수집된 상품 식별값이 최종 쿠팡 상품 주소와 일치하지 않습니다.');
-    const imageUrls=normalizeImages(value.imageUrls);if(!imageUrls.length)throw new CoupangChromeCollectorError('PRODUCT_IMAGES_NOT_FOUND','상품 갤러리 이미지를 확인하지 못했습니다. 열린 Chrome 상품 페이지를 확인하세요.');
+    const imageUrls=normalizeImages(value.imageUrls);if(!imageUrls.length&&!normalizeImages(value.unknownImageUrls).length)throw new CoupangChromeCollectorError('PRODUCT_IMAGES_NOT_FOUND','상품 갤러리 이미지를 확인하지 못했습니다. 열린 Chrome 상품 페이지를 확인하세요.');
     const reviews:Array<CollectorReview>=[];
     if(Array.isArray(value.reviews))for(const entry of value.reviews.slice(0,8)){
       if(!isRecord(entry))continue;const reviewTextRaw=safeText(entry.reviewTextRaw,4000);if(!reviewTextRaw)continue;
       const optionTextRaw=safeText(entry.optionTextRaw,500);const rating=typeof entry.rating==='number'&&entry.rating>=1&&entry.rating<=5?entry.rating:undefined;
       reviews.push({reviewTextRaw,...(optionTextRaw?{optionTextRaw}:{}),...(rating?{rating}:{})});
     }
-    return {...location,productTitleRaw:safeText(value.productTitleRaw,500),imageUrls,reviews,collectedAt:safeText(value.collectedAt,60)??new Date().toISOString()};
+    return {...location,productTitleRaw:safeText(value.productTitleRaw,500),imageUrls,unknownImageUrls:normalizeImages(value.unknownImageUrls),reviews,collectedAt:safeText(value.collectedAt,60)??new Date().toISOString()};
   }
 
   private parseNaverBrandProduct(value:unknown):NaverBrandChromeCollectionResult{
     if(!isRecord(value))throw new CoupangChromeCollectorError('INVALID_PRODUCT_RESULT','수집된 네이버 상품 정보 형식이 올바르지 않습니다.');
+    if(value.qualityChecked!==true)throw new CoupangChromeCollectorError('COLLECTOR_UPDATE_REQUIRED','이미지 품질 확인을 위해 Chrome 확장프로그램을 새로고침하세요.');
     const finalUrl=safeText(value.finalUrl,2_000);const productKey=safeText(value.productKey,200);
     if(!finalUrl||!productKey)throw new CoupangChromeCollectorError('PRODUCT_IDENTITY_MISMATCH','네이버 상품의 최종 주소와 식별값을 확인하지 못했습니다.');
     try{const url=new URL(finalUrl);if(url.protocol!=='https:'||!['brand.naver.com','smartstore.naver.com','shopping.naver.com','pkgtour.naver.com'].includes(url.hostname))throw new Error();}catch{throw new CoupangChromeCollectorError('PRODUCT_IDENTITY_MISMATCH','네이버 상품의 최종 주소가 허용된 상품 페이지가 아닙니다.');}
-    const imageUrls=normalizeNaverImages(value.imageUrls);if(!imageUrls.length)throw new CoupangChromeCollectorError('PRODUCT_IMAGES_NOT_FOUND','네이버 상품 갤러리 이미지를 확인하지 못했습니다.');
+    const imageUrls=normalizeNaverImages(value.imageUrls);if(!imageUrls.length&&!normalizeNaverImages(value.unknownImageUrls).length)throw new CoupangChromeCollectorError('PRODUCT_IMAGES_NOT_FOUND','네이버 상품 갤러리 이미지를 확인하지 못했습니다.');
     const reviews:Array<CollectorReview>=[];
     if(Array.isArray(value.reviews))for(const entry of value.reviews.slice(0,8)){if(!isRecord(entry))continue;const reviewTextRaw=safeText(entry.reviewTextRaw,4000);if(!reviewTextRaw)continue;const rating=typeof entry.rating==='number'&&entry.rating>=1&&entry.rating<=5?entry.rating:undefined;reviews.push({reviewTextRaw,...(rating?{rating}:{})});}
     const productFacts=Array.isArray(value.productFacts)?value.productFacts.map((entry)=>safeText(entry,1500)).filter((entry):entry is string=>Boolean(entry)).slice(0,60):[];
-    return {finalUrl,productKey,productTitleRaw:safeText(value.productTitleRaw,500),imageUrls,reviews,productFacts,collectedAt:safeText(value.collectedAt,60)??new Date().toISOString()};
+    return {finalUrl,productKey,productTitleRaw:safeText(value.productTitleRaw,500),imageUrls,unknownImageUrls:normalizeNaverImages(value.unknownImageUrls),reviews,productFacts,collectedAt:safeText(value.collectedAt,60)??new Date().toISOString()};
   }
 
   private rejectAll(error:Error):void{for(const pending of this.pending.values()){clearTimeout(pending.timer);pending.reject(error);}this.pending.clear();}

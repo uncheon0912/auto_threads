@@ -243,6 +243,7 @@ function coupangLinkFromRow(row:any):CoupangProductQueueItem {
     affiliateUrl:row.affiliate_url, urlFingerprint:row.url_fingerprint,
     productName:row.product_name ?? undefined, productNote:row.product_note, imageUrl:storedMedia.imageUrl,
     imageUrls:storedMedia.imageUrls, media:storedMedia.media,
+    excludedImages:json<Array<{url:string;position:number;reason?:'unverified'}>>(row.excluded_images_json??'[]',[]),
     productFacts:json<string[]>(row.product_facts_json, []), researchSourceUrls:json<string[]>(row.research_source_urls_json, []),
     reviewEvidence, researchVersion:Number(row.research_version ?? 1), reviewCount:Number(row.review_count ?? reviewEvidence.length),
     reviewCollectedAt:row.review_collected_at ?? undefined,
@@ -282,6 +283,7 @@ export interface CoupangLinkCreateInput {
   productNote?:string;
   imageUrl?:string;
   imageUrls?:string[];
+  excludedImages?:Array<{url:string;position:number;reason?:'unverified'}>;
   media?:MediaAsset[];
   productFacts?:string[];
   researchSourceUrls?:string[];
@@ -457,13 +459,13 @@ export class Repositories {
       this.db.raw.prepare(`INSERT INTO coupang_link_queue(
         id,account_id,original_input_type,affiliate_url,url_fingerprint,product_name,product_note,image_url,image_urls_json,media_json,
         product_facts_json,research_source_urls_json,review_evidence_json,research_version,review_count,review_collected_at,
-        metadata_status,research_verified,sort_order,status,attempt_count,last_error,researched_at,created_at,updated_at,provider_type
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,0,?,?,?,?,?)`).run(
+        metadata_status,research_verified,sort_order,status,attempt_count,last_error,researched_at,created_at,updated_at,provider_type,excluded_images_json
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,0,?,?,?,?,?,?)`).run(
         id,input.accountId,input.originalInputType,input.affiliateUrl,input.urlFingerprint,input.productName?.trim()||null,
         input.productNote?.trim()??'',storedMedia.imageUrl??null,JSON.stringify(storedMedia.imageUrls),JSON.stringify(storedMedia.media),
         JSON.stringify(input.productFacts??[]),JSON.stringify(input.researchSourceUrls??[]),JSON.stringify(reviewEvidence),
         input.researchVersion??1,input.reviewCount??reviewEvidence.length,input.reviewCollectedAt??null,
-        input.metadataStatus,row.next_order,status,input.lastError??null,input.researchedAt??null,now,now,providerType,
+        input.metadataStatus,row.next_order,status,input.lastError??null,input.researchedAt??null,now,now,providerType,JSON.stringify(input.excludedImages??[]),
       );
       return this.getProductLink(id,input.accountId,providerType)!;
     });
@@ -507,14 +509,14 @@ export class Repositories {
   listPendingCoupangLinks(accountId:string):CoupangProductQueueItem[] {
     return this.db.raw.prepare(`SELECT q.*,p.body draft_body,p.coupang_reply_body draft_reply_body,
       p.coupang_reply_status draft_reply_status FROM coupang_link_queue q LEFT JOIN posts p ON p.id=q.draft_post_id
-      WHERE q.account_id=? AND q.provider_type='COUPANG' AND q.status NOT IN ('COMPLETED','FAILED') ORDER BY q.sort_order,q.created_at,q.id`)
+      WHERE q.account_id=? AND q.provider_type='COUPANG' AND q.status<>'COMPLETED' ORDER BY q.sort_order,q.created_at,q.id`)
       .all(accountId).map(coupangLinkFromRow);
   }
 
   listPendingNaverBrandLinks(accountId:string):CoupangProductQueueItem[] {
     return this.db.raw.prepare(`SELECT q.*,p.body draft_body,p.coupang_reply_body draft_reply_body,
       p.coupang_reply_status draft_reply_status FROM coupang_link_queue q LEFT JOIN posts p ON p.id=q.draft_post_id
-      WHERE q.account_id=? AND q.provider_type='NAVER_BRAND_CONNECT' AND q.status NOT IN ('COMPLETED','FAILED') ORDER BY q.sort_order,q.created_at,q.id`)
+      WHERE q.account_id=? AND q.provider_type='NAVER_BRAND_CONNECT' AND q.status<>'COMPLETED' ORDER BY q.sort_order,q.created_at,q.id`)
       .all(accountId).map(coupangLinkFromRow);
   }
 
@@ -581,6 +583,47 @@ export class Repositories {
     return this.getPost(postId)!;
   }
 
+  updatePreparedProductImages(id:string,accountId:string,imageUrls:string[],restore:boolean,expectedUpdatedAt:string):CoupangProductQueueItem {
+    return this.db.raw.transaction(()=>{
+      const current=this.getAnyProductLink(id,accountId);
+      if(!current)throw new Error('상품을 찾을 수 없습니다.');
+      if(current.updatedAt!==expectedUpdatedAt)throw new Error('이미지 목록이 변경되었습니다. 새로고침 후 다시 시도하세요.');
+      if(current.status==='REVIEW_REQUIRED'&&!current.draftPostId&&!current.activeSourceId&&restore){
+        const selected=new Set(imageUrls),excluded=current.excludedImages??[];
+        if(imageUrls.some(url=>!excluded.some(item=>item.url===url)))throw new Error('선택한 이미지가 현재 목록과 다릅니다.');
+        const urls=excluded.filter(item=>selected.has(item.url)).sort((a,b)=>a.position-b.position).map(item=>item.url);
+        if(!urls.length||urls.length>20)throw new Error('이미지는 1장 이상 20장 이하로 선택하세요.');
+        const media=normalizedMedia({imageUrls:urls});
+        const now=new Date(Math.max(Date.now(),Date.parse(current.updatedAt)+1)).toISOString();
+        this.db.raw.prepare("UPDATE coupang_link_queue SET image_url=?,image_urls_json=?,media_json=?,excluded_images_json=?,metadata_status='READY',status='QUEUED',last_error=NULL,updated_at=? WHERE id=? AND account_id=? AND updated_at=?").run(media.imageUrl??null,JSON.stringify(media.imageUrls),JSON.stringify(media.media),JSON.stringify(excluded.filter(item=>!selected.has(item.url))),now,id,accountId,expectedUpdatedAt);
+        return this.getAnyProductLink(id,accountId)!;
+      }
+      if(current.status!=='PREVIEW_READY'||!current.draftPostId||!current.activeSourceId)throw new Error('발행 준비된 상품 이미지만 변경할 수 있습니다.');
+      const post:any=this.db.raw.prepare('SELECT threads_post_id FROM posts WHERE id=? AND account_id=?').get(current.draftPostId,accountId);
+      if(!post||post.threads_post_id)throw new Error('이미 발행된 상품은 변경할 수 없습니다.');
+      const source:any=this.db.raw.prepare('SELECT metadata_json FROM sources WHERE id=? AND account_id=?').get(current.activeSourceId,accountId);
+      if(!source)throw new Error('연결된 상품 자료를 찾을 수 없습니다.');
+      const selected=new Set(imageUrls), excluded=current.excludedImages??[];
+      if(restore?imageUrls.some(url=>!excluded.some(item=>item.url===url)):imageUrls.some(url=>!current.imageUrls.includes(url)))throw new Error('선택한 이미지가 현재 목록과 다릅니다.');
+      let urls=[...current.imageUrls];let nextExcluded:Array<{url:string;position:number;reason?:'unverified'}>;
+      if(restore){
+        const entries=excluded.filter(item=>selected.has(item.url)).sort((a,b)=>a.position-b.position);
+        if(urls.length+entries.length>20)throw new Error('발행 이미지는 최대 20장까지 복원할 수 있습니다.');
+        for(const item of entries)urls.splice(Math.min(item.position,urls.length),0,item.url);
+        nextExcluded=excluded.filter(item=>!selected.has(item.url));
+      }else{
+        nextExcluded=[...excluded,...urls.flatMap((url,position)=>selected.has(url)?[{url,position}]:[])];
+        urls=urls.filter(url=>!selected.has(url));
+      }
+      const stored=normalizedMedia({imageUrls:urls,media:current.media.filter(asset=>urls.includes(asset.url))});
+      const meta=json<Record<string,unknown>>(source.metadata_json,{}),now=new Date(Math.max(Date.now(),Date.parse(current.updatedAt)+1)).toISOString();
+      this.db.raw.prepare('UPDATE coupang_link_queue SET image_url=?,image_urls_json=?,media_json=?,excluded_images_json=?,updated_at=? WHERE id=? AND account_id=? AND updated_at=?').run(stored.imageUrl??null,JSON.stringify(stored.imageUrls),JSON.stringify(stored.media),JSON.stringify(nextExcluded),now,id,accountId,expectedUpdatedAt);
+      this.db.raw.prepare('UPDATE posts SET image_url=?,image_urls_json=?,media_json=? WHERE id=? AND account_id=? AND threads_post_id IS NULL').run(stored.imageUrl??null,JSON.stringify(stored.imageUrls),JSON.stringify(stored.media),current.draftPostId,accountId);
+      this.db.raw.prepare('UPDATE sources SET metadata_json=? WHERE id=? AND account_id=?').run(JSON.stringify({...meta,imageUrl:stored.imageUrl,imageUrls:stored.imageUrls,media:stored.media}),current.activeSourceId,accountId);
+      return this.getAnyProductLink(id,accountId)!;
+    })();
+  }
+
   removePreparedCoupangImage(id:string,accountId:string,imageUrl:string,expectedUpdatedAt:string):CoupangProductQueueItem {
     const remove=this.db.raw.transaction(()=>{
       const current=this.getAnyProductLink(id,accountId);
@@ -634,25 +677,28 @@ export class Repositories {
     return this.getAnyProductLink(id,accountId)!;
   }
 
-  applyCoupangLinkResearch(id:string,accountId:string,research:{affiliateUrl:string;urlFingerprint:string;productName?:string;imageUrl?:string;imageUrls?:string[];media?:MediaAsset[];productFacts:string[];researchSourceUrls:string[];reviewEvidence?:CoupangReviewEvidence[];researchVersion?:number;reviewCount?:number;reviewCollectedAt?:string;metadataStatus:CoupangMetadataStatus;researchedAt:string;lastError?:string}):CoupangProductQueueItem {
+  applyCoupangLinkResearch(id:string,accountId:string,research:{affiliateUrl:string;urlFingerprint:string;productName?:string;imageUrl?:string;imageUrls?:string[];media?:MediaAsset[];excludedImages?:Array<{url:string;position:number;reason?:'unverified'}>;productFacts:string[];researchSourceUrls:string[];reviewEvidence?:CoupangReviewEvidence[];researchVersion?:number;reviewCount?:number;reviewCollectedAt?:string;metadataStatus:CoupangMetadataStatus;researchedAt:string;lastError?:string}):CoupangProductQueueItem {
     const current=this.getAnyProductLink(id,accountId);
     if (!current) throw new Error('쿠팡 상품 링크를 찾을 수 없습니다.');
     if (current.status==='PROCESSING'||current.status==='COMPLETED') throw new Error('처리 중이거나 완료된 쿠팡 상품 정보는 변경할 수 없습니다.');
     const mediaChanged=research.imageUrl!==undefined||research.imageUrls!==undefined||research.media!==undefined;
-    const storedMedia=mediaChanged ? normalizedMedia(research) : current;
+    const excluded=[...(current.excludedImages??[])];
+    for(const image of research.excludedImages??[])if(!excluded.some(item=>item.url===image.url))excluded.push(image);
+    const excludedUrls=new Set(excluded.map(item=>item.url));
+    const storedMedia=mediaChanged ? normalizedMedia({imageUrls:(research.imageUrls??(research.imageUrl?[research.imageUrl]:[])).filter(url=>!excludedUrls.has(url)),media:(research.media??[]).filter(asset=>!excludedUrls.has(asset.url))}) : current;
     const reviewEvidence=research.reviewEvidence===undefined ? current.reviewEvidence : normalizedReviewEvidence(research.reviewEvidence);
     const status:CoupangLinkQueueStatus=research.metadataStatus==='READY' ? 'QUEUED'
       : research.metadataStatus==='FAILED' ? 'REVIEW_REQUIRED' : 'INFORMATION_REQUIRED';
     this.db.raw.prepare(`UPDATE coupang_link_queue SET affiliate_url=?,url_fingerprint=?,product_name=?,image_url=?,image_urls_json=?,media_json=?,
       product_facts_json=?,research_source_urls_json=?,review_evidence_json=?,research_version=?,review_count=?,review_collected_at=?,
-      metadata_status=?,research_verified=0,status=?,researched_at=?,last_error=?,updated_at=?
+      metadata_status=?,research_verified=0,status=?,researched_at=?,last_error=?,updated_at=?,excluded_images_json=?
       WHERE id=? AND account_id=?`).run(
       research.affiliateUrl,research.urlFingerprint,research.productName?.trim()||null,storedMedia.imageUrl??null,
       JSON.stringify(storedMedia.imageUrls),JSON.stringify(storedMedia.media),JSON.stringify(research.productFacts),JSON.stringify(research.researchSourceUrls),
       JSON.stringify(reviewEvidence),research.researchVersion??current.researchVersion,
       research.reviewCount??(research.reviewEvidence===undefined?current.reviewCount:reviewEvidence.length),
       research.reviewCollectedAt??current.reviewCollectedAt??null,research.metadataStatus,status,
-      research.researchedAt,research.lastError??null,new Date().toISOString(),id,accountId,
+      research.researchedAt,research.lastError??null,new Date().toISOString(),JSON.stringify(excluded),id,accountId,
     );
     return this.getAnyProductLink(id,accountId)!;
   }
@@ -692,6 +738,39 @@ export class Repositories {
       .run(sortOrder,new Date().toISOString(),id,accountId);
     if (!result.changes) throw new Error('쿠팡 상품 링크를 찾을 수 없습니다.');
     return this.getAnyProductLink(id,accountId)!;
+  }
+
+  trashProductLinks(accountId:string,providerType:ProductQueueProvider,ids:string[]):number {
+    return this.db.raw.transaction(()=>{
+      for(const id of ids){
+        const row:any=this.db.raw.prepare("SELECT q.* FROM coupang_link_queue q WHERE q.id=? AND q.account_id=? AND q.provider_type=? AND q.status NOT IN ('PROCESSING','COMPLETED') AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.id=q.draft_post_id AND p.threads_post_id IS NOT NULL)").get(id,accountId,providerType);
+        if(!row)throw new Error('처리 중이거나 이미 발행된 상품은 삭제할 수 없습니다. 목록을 새로고침하세요.');
+        this.db.raw.prepare('INSERT INTO product_queue_trash(id,account_id,provider_type,data_json,deleted_at) VALUES (?,?,?,?,?)').run(id,accountId,providerType,JSON.stringify(row),new Date().toISOString());
+        this.db.raw.prepare('DELETE FROM coupang_link_queue WHERE id=? AND account_id=?').run(id,accountId);
+      }
+      return ids.length;
+    })();
+  }
+
+  listTrashedProductLinks(accountId:string,providerType:ProductQueueProvider):Array<{id:string;name:string;deletedAt:string}> {
+    const rows=this.db.raw.prepare('SELECT id,data_json,deleted_at FROM product_queue_trash WHERE account_id=? AND provider_type=? ORDER BY deleted_at DESC').all(accountId,providerType) as Array<{id:string;data_json:string;deleted_at:string}>;
+    return rows.map(row=>({id:row.id,name:String(json<Record<string,unknown>>(row.data_json,{}).product_name??'상품 정보 확인 필요'),deletedAt:row.deleted_at}));
+  }
+
+  restoreTrashedProductLinks(accountId:string,providerType:ProductQueueProvider,ids:string[]):number {
+    return this.db.raw.transaction(()=>{
+      for(const id of ids){
+        const item:any=this.db.raw.prepare('SELECT data_json FROM product_queue_trash WHERE id=? AND account_id=? AND provider_type=?').get(id,accountId,providerType);
+        if(!item)throw new Error('복원할 상품을 찾을 수 없습니다.');
+        const row=json<Record<string,unknown>>(item.data_json,{}),columns=Object.keys(row);
+        const allowed=new Set((this.db.raw.pragma('table_info(coupang_link_queue)') as Array<{name:string}>).map(column=>column.name));
+        if(!columns.length||columns.some(column=>!allowed.has(column))||row.id!==id||row.account_id!==accountId||row.provider_type!==providerType)throw new Error('복원 데이터가 올바르지 않습니다.');
+        try{this.db.raw.prepare(`INSERT INTO coupang_link_queue (${columns.map(column=>`"${column}"`).join(',')}) VALUES (${columns.map(()=>'?').join(',')})`).run(...columns.map(column=>row[column]));}
+        catch{throw new Error('같은 상품이 이미 등록되어 있거나 연결된 자료가 없어 복원할 수 없습니다.');}
+        this.db.raw.prepare('DELETE FROM product_queue_trash WHERE id=? AND account_id=?').run(id,accountId);
+      }
+      return ids.length;
+    })();
   }
 
   deleteCoupangLink(id:string,accountId:string):boolean {

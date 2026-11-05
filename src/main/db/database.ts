@@ -325,6 +325,8 @@ const migrations = [
    ALTER TABLE pipeline_runs ADD COLUMN ai_measured_calls INTEGER NOT NULL DEFAULT 0;
    ALTER TABLE pipeline_runs ADD COLUMN ai_input_tokens INTEGER NOT NULL DEFAULT 0;
    ALTER TABLE pipeline_runs ADD COLUMN ai_output_tokens INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE coupang_link_queue ADD COLUMN excluded_images_json TEXT NOT NULL DEFAULT '[]';
+   CREATE TABLE product_queue_trash (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, provider_type TEXT NOT NULL, data_json TEXT NOT NULL, deleted_at TEXT NOT NULL);`,
 ];
 
 export class AppDatabase {
