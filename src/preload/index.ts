@@ -8,6 +8,11 @@ window.addEventListener('DOMContentLoaded', () => {
 }, { once: true });
 
 const api = {
+  updates: {
+    status: () => ipcRenderer.invoke('app-updates:status') as Promise<{current:string;supported:boolean;previous?:string}>,
+    check: () => ipcRenderer.invoke('app-updates:check') as Promise<string>,
+    restore: () => ipcRenderer.invoke('app-updates:restore') as Promise<void>,
+  },
   snapshot: () => ipcRenderer.invoke('app:snapshot'),
   codex: {
     login: () => ipcRenderer.invoke('codex:login') as Promise<CodexUsageStatus>,

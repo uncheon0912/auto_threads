@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, Menu, powerMonitor, Tray } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, powerMonitor, Tray } from 'electron';
 import started from 'electron-squirrel-startup';
 import type { CredentialKey } from '../shared/domain';
 import { POLICY } from '../shared/policy';
@@ -29,6 +29,7 @@ import { loadMainRenderer } from './services/main-window-loader';
 import { enforceStoppedAutomationOnStartup } from './services/startup-automation';
 import { projectDataDirectory, projectStorageRoot } from './services/storage-paths';
 import { LocalWritingPrompts } from './services/2026-11-06-local-writing-prompts';
+import { registerAppUpdates } from './services/2026-11-06-app-updates';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -264,6 +265,13 @@ async function createApplication(): Promise<void> {
 
   registerIpc({ window: mainWindow, repositories, settings, credentials, scheduler, codex, usage, registry, threads, coupang, eligibility, pipeline,
     threadsIntegration, ownedContent, threadsAccounts, coupangCollector, safeUiTestMode:safeUiTestMode || automationTestLock });
+  registerAppUpdates({
+    window:mainWindow,userData,testMode:safeUiTestMode||automationTestLock,
+    busy:()=>scheduler.isRunning()||repositories.runningJobs(1).length>0
+      ||Boolean(database.raw.prepare("SELECT 1 FROM pipeline_runs WHERE status IN ('QUEUED','RUNNING') LIMIT 1").get()),
+    backupDatabase:destination=>database.raw.backup(destination),
+  });
+  autoUpdater.on('before-quit-for-update',()=>{quitting=true;});
   const rendererUrl=MAIN_WINDOW_VITE_DEV_SERVER_URL
     ||pathToFileURL(path.join(__dirname,`../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)).toString();
   await loadMainRenderer(mainWindow,rendererUrl,{attempts:MAIN_WINDOW_VITE_DEV_SERVER_URL?3:1});
