@@ -50,6 +50,7 @@ function trusted(event: IpcMainInvokeEvent, window: BrowserWindow): void {
 
 export function registerIpc(deps: Dependencies): void {
   const writingPrompts=new LocalWritingPrompts(app.getPath('userData'));
+  let promptTestFailure=Boolean(deps.safeUiTestMode&&process.env.THREADS_AUTO_UI_ACTION==='writing-prompts-load-retry');
   const promptAccount=(id:string)=>{const account=deps.repositories.getAccount(id);if(!account)throw new Error('계정을 찾을 수 없습니다.');return account;};
   const candidateCache = new Map<string, SourceCandidate[]>();
   const coupangProductCache = new Map<string, SourceCandidate[]>();
@@ -236,6 +237,8 @@ export function registerIpc(deps: Dependencies): void {
       .map((log) => ({ ...log, detail:undefined, diagnosticSummary:redactForUi(log.detail) }));
     return { accounts, logs: diagnosticLogs, settings: await deps.settings.read(), pendingJobs: deps.repositories.pendingJobs(), runningJobs:deps.repositories.runningJobs(), pipelineRuns:deps.repositories.listPipelineRuns(undefined, 100), scheduledPublicationHistory:deps.repositories.listScheduledPublicationHistory(100), dashboard: {
       automationRunning: deps.scheduler.isRunning(), accountCount: counts.accounts, automationAccountCount: counts.automation,
+      automationAllAccounts:deps.scheduler.isAllAccountsMode(),
+      automationRunningAccountIds:accounts.filter(account=>deps.scheduler.isAccountRunning(account)).map(account=>account.id),
       todaySuccessCount: counts.successToday, failedJobCount: counts.failed, pendingJobCount: counts.pending,
       recentPosts: deps.repositories.recentPosts(100), recentErrors: diagnosticLogs.filter((log) => log.level === 'ERROR').slice(0,20),
       codex: await deps.codex.health(), usage: deps.usage.current(), apiStatus: {
@@ -246,7 +249,7 @@ export function registerIpc(deps: Dependencies): void {
     }, accountRuntime };
   });
   handle('accounts:register-threads', threadsRegistrationSchema, ({ accessToken }) => threadsAccounts.register(accessToken));
-  handle('writing-prompts:get', z.string().uuid(), (id) => writingPrompts.get(promptAccount(id)));
+  handle('writing-prompts:get', z.string().uuid(), (id) => {if(promptTestFailure){promptTestFailure=false;throw new Error('테스트용 읽기 실패');}return writingPrompts.get(promptAccount(id));});
   handle('writing-prompts:save', z.object({accountId:z.string().uuid(),common:z.string().max(12000),account:z.string().max(12000),reference:z.string().max(12000),promotion:z.string().max(12000),excludeCommon:z.boolean()}), (input) => {writingPrompts.save(promptAccount(input.accountId),input);return true;});
   handle('accounts:update-threads-token', threadsTokenUpdateSchema, ({ accountId, accessToken }) => threadsAccounts.updateToken(accountId, accessToken));
   handle('accounts:verify-threads', z.string().uuid(), (accountId) => threadsAccounts.verifyStoredToken(accountId));
@@ -499,6 +502,7 @@ export function registerIpc(deps: Dependencies): void {
     return status;
   });
   handle('settings:save', settingsSchema, async (input) => {
+    const previous=await deps.settings.read();
     if (input.schedulerEnabled && deps.safeUiTestMode) throw new Error('안전 UI 테스트 모드에서는 자동화를 시작할 수 없습니다.');
     if (input.schedulerEnabled) await deps.eligibility.assertAutomationReady();
     await deps.settings.save(input);
@@ -506,7 +510,7 @@ export function registerIpc(deps: Dependencies): void {
     if(input.schedulerEnabled){
       if(deps.scheduler.isRunning())await deps.scheduler.rebuildSchedules();
       else await deps.scheduler.startFresh();
-    }else await deps.scheduler.stopAndClearSchedules();
+    }else if(previous.schedulerEnabled)await deps.scheduler.stopAndClearSchedules();
     return input;
   });
   handle('credentials:status', z.array(credentialKeySchema).max(100), (keys) => deps.credentials.status(keys as CredentialKey[]));
@@ -560,10 +564,20 @@ export function registerIpc(deps: Dependencies): void {
     if(enabled){
       const result=await deps.scheduler.startFresh();
       cancelled=result.cancelled;scheduled=result.scheduled;
-    }else cancelled=await deps.scheduler.stopAndClearSchedules();
+    }else {
+      for(const account of deps.repositories.listAccounts())deps.pipeline.stopComments(account.id);
+      cancelled=await deps.scheduler.stopAndClearSchedules();
+    }
     return {running:deps.scheduler.isRunning(),cancelled,scheduled,pendingJobCount:deps.repositories.pendingJobs().length};
   });
   handle('automation:cancel', z.string().min(1).max(500), (id) => deps.repositories.cancelJob(id));
+  handle('automation:start-account', z.string().uuid(), async accountId=>{
+    if(deps.safeUiTestMode)throw new Error('안전 UI 테스트 모드에서는 자동화를 시작할 수 없습니다.');
+    const error=codexModelSelectionError((await deps.settings.read()).codex.model);
+    if(error)throw new Error(error);
+    await deps.eligibility.assertAccountReady(accountId);
+    return {scheduled:await deps.scheduler.startAccount(accountId)};
+  });
   handle('automation:stop-account', z.string().uuid(), (accountId) => {
     if(!deps.repositories.getAccount(accountId))throw new Error('중지할 계정을 찾을 수 없습니다.');
     deps.pipeline.stopComments(accountId);

@@ -216,9 +216,55 @@ export class AutomationScheduler {
   async startFresh(now = new Date()):Promise<{cancelled:number;scheduled:number}> {
     // 대시보드의 전체 시작은 사용자가 취소했던 남은 예약도 다시 만들겠다는
     // 명시적 요청이다. 일반 재계획과 주기 실행에서는 개별 취소를 계속 존중한다.
+    this.accountScope=undefined;
     const result=await this.rebuildSchedules(now,{reviveUserCancelledPublish:true});
     if(!this.running)this.start();
     return result;
+  }
+
+  private accountScope?: Set<string>;
+
+  isAccountRunning(account: Account): boolean {
+    return this.running && account.active && account.automationTarget && this.includesAccount(account.id);
+  }
+
+  isAllAccountsMode(): boolean {
+    return this.running && !this.accountScope;
+  }
+
+  private includesAccount(accountId:string): boolean {
+    return !this.accountScope || this.accountScope.has(accountId);
+  }
+
+  async startAccount(accountId:string, now=new Date()):Promise<number> {
+    return this.serializeSchedule(async()=>{
+      const account=this.repositories.getAccount(accountId);
+      if(!account?.active)throw new Error('활성 계정만 예약을 시작할 수 있습니다.');
+      if(this.isAccountRunning(account))return 0;
+      const previousScope=this.accountScope;
+      const generation=this.runGeneration;
+      const accountGeneration=this.accountStopGeneration.get(accountId);
+      if(!this.running){
+        this.accountScope=new Set([accountId]);
+        this.publicationNotBefore=new Date(now.getTime()+START_DELAY_MS);
+      }else if(previousScope)this.accountScope=new Set([...previousScope,accountId]);
+      this.repositories.setAutomationTarget(accountId,true);
+      try{
+        const scheduled=await this.scheduleAccounts(now,{accountId,reviveUserCancelledPublish:true});
+        if(generation!==this.runGeneration || accountGeneration!==this.accountStopGeneration.get(accountId)){
+          this.repositories.cancelPendingScheduledJobs(accountId,ACCOUNT_AUTOMATION_STOP_REASON);
+          return 0;
+        }
+        if(!this.running)this.start();
+        else this.armNextWake();
+        return scheduled;
+      }catch(error){
+        this.accountScope=previousScope;
+        this.repositories.setAutomationTarget(accountId,account.automationTarget);
+        this.repositories.cancelPendingScheduledJobs(accountId,ACCOUNT_AUTOMATION_STOP_REASON);
+        throw error;
+      }
+    });
   }
 
   refreshCommentSettings(accountId:string):void {
@@ -267,14 +313,15 @@ export class AutomationScheduler {
     }
   }
 
-  private async scheduleAccounts(now: Date, options:{reviveUserCancelledPublish?:boolean}={}): Promise<number> {
+  private async scheduleAccounts(now: Date, options:{reviveUserCancelledPublish?:boolean;accountId?:string}={}): Promise<number> {
     const accounts = this.repositories.listAccounts();
-    const eligibleAccounts:Account[]=[];
+    const scopedAccounts:Account[]=[];
     for (const account of accounts) {
-      if (!account.active || !account.automationTarget) continue;
-      if (await this.eligibility.hasThreadsToken(account.id)) eligibleAccounts.push(account);
+      if (!account.active || !account.automationTarget || !this.includesAccount(account.id)) continue;
+      if (await this.eligibility.hasThreadsToken(account.id) && this.repositories.getAccount(account.id)?.automationTarget) scopedAccounts.push(account);
     }
-    this.recurringAccounts=eligibleAccounts;
+    this.recurringAccounts=scopedAccounts;
+    const eligibleAccounts=options.accountId?scopedAccounts.filter(account=>account.id===options.accountId):scopedAccounts;
     const day = now.toLocaleDateString('sv-SE');
     const successfulHistory=Object.fromEntries(eligibleAccounts.map((account)=>[account.id,this.repositories.successfulPublicationScheduleHistory(account.id,day)]));
     let scheduled=0;
@@ -407,7 +454,7 @@ export class AutomationScheduler {
     const generation=this.runGeneration;
     const accountGeneration=this.accountStopGeneration.get(job.accountId)??0;
     const account = this.repositories.getAccount(job.accountId);
-    if (!account?.active || !account.automationTarget) {
+    if (!account?.active || !account.automationTarget || !this.includesAccount(job.accountId)) {
       this.repositories.completeJob(job.id, 'DONE');
       this.emitActivity(job, 'CANCELLED', '자동화 대상에서 제외되어 작업을 건너뛰었습니다.');
       this.repositories.addLog('INFO', 'JOB', '실행 직전 자동화 대상에서 제외되어 Job을 건너뛰었습니다.', undefined, job.accountId);

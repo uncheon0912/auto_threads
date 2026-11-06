@@ -88,6 +88,7 @@ const api = {
   connections: { test: (type: 'THREADS'|'YOUTUBE'|'BLOG'|'COUPANG', accountId?: string, config: Record<string, unknown> = {}) => ipcRenderer.invoke('connections:test', { type, accountId, config }) },
   automation: {
     stopAccount: (accountId:string) => ipcRenderer.invoke('automation:stop-account',accountId) as Promise<{cancelled:number}>,
+    startAccount: (accountId:string) => ipcRenderer.invoke('automation:start-account',accountId) as Promise<{scheduled:number}>,
     set: (enabled: boolean) => ipcRenderer.invoke('automation:set', enabled) as Promise<AutomationScheduleMutationResult>,
     cancel: (id: string) => ipcRenderer.invoke('automation:cancel', id),
     updatePromotionType: (input:{jobId:string;accountId:string;sourceType:Exclude<SourceType,'DAILY'>}) => ipcRenderer.invoke('automation:update-promotion-type', input) as Promise<JobRecord>,

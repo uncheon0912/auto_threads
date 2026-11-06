@@ -738,7 +738,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
       if(!failure){
         const pair=JSON.stringify({body,reply});
         this.progress(runId,'ORCHESTRATOR',92,'본문과 첫 댓글의 사실성·연결·후킹을 독립 검수하고 있습니다.');
-        const review=await this.agent('orchestrator',`본문과 첫 댓글을 독립 검수하라. 원문의 사실을 벗어나지 않고 사용자 말투와 금지사항을 지키며, 본문이 구체적인 관심을 만들고 댓글이 실제 답을 주는지 확인한다. 과장·허위·광고 고지 누락은 반려한다. 통과하면 content에 pair 문자열을 한 글자도 바꾸지 말고 반환하고 vetoes는 빈 배열로 둔다. 반려하면 수정 방향을 짧게 제시한다.\n${JSON.stringify({original,pair,profile:this.profile(account,mode)})}`,false,undefined,mode==='DAILY'&&Boolean(account.writingInstructions.trim()),runId);
+        const review=await this.agent('orchestrator',`본문과 첫 댓글을 독립 검수하라. 원문의 사실을 벗어나지 않고 사용자 말투와 금지사항을 지키며, 본문에서 주제나 상황을 알아볼 수 있고 첫 댓글이 자연스럽게 이어지며 실질적인 답이나 정보를 주면 통과시킨다. 첫 문장의 후킹이 약하거나 표현을 더 구체적으로 다듬을 수 있다는 이유만으로 반려하거나 vetoes를 추가하지 마라. 이런 개선 의견은 reason에만 적어라. 본문과 댓글이 무관하거나 댓글에 실질적인 내용이 없으면 반려한다. 과장·허위·금지 표현·광고 고지 누락은 반려한다. 통과하면 content에 pair 문자열을 한 글자도 바꾸지 말고 반환하고 vetoes는 빈 배열로 둔다. 반려하면 수정 방향을 짧게 제시한다.\n${JSON.stringify({original,pair,profile:this.profile(account,mode)})}`,false,undefined,mode==='DAILY'&&Boolean(account.writingInstructions.trim()),runId);
         if(review.decision==='PASS'&&!review.vetoes.length&&review.content===pair&&!review.sourceUrls.length)return {body,reply};
         failure=`독립 검수 반려: ${review.reason}`;
       }

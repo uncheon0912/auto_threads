@@ -949,7 +949,11 @@ export class Repositories {
   }
 
   disableAutomationTarget(accountId: string): void {
-    this.db.raw.prepare('UPDATE accounts SET automation_target=0, updated_at=? WHERE id=?').run(new Date().toISOString(), accountId);
+    this.setAutomationTarget(accountId,false);
+  }
+
+  setAutomationTarget(accountId:string, enabled:boolean):void {
+    this.db.raw.prepare('UPDATE accounts SET automation_target=?, updated_at=? WHERE id=?').run(Number(enabled),new Date().toISOString(),accountId);
   }
 
   cancelPendingThreadsJobs(accountId: string): number {

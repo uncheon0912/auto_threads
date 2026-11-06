@@ -471,7 +471,7 @@ async function createApplication(): Promise<void> {
         const daily=[...document.querySelectorAll('.modal label.field')].find(element=>element.querySelector('span')?.textContent==='일상글 전용 프롬프트')?.querySelector('textarea');
         if(!daily||daily.value!==''||!daily.placeholder.includes('자영업자'))return false;
         const labels=['모든 계정 공통 프롬프트','이 계정의 프롬프트','이 계정의 참고 글 스타일','홍보글 전용 프롬프트'];
-        const fields=labels.map(label=>[...document.querySelectorAll('.modal label.field')].find(element=>element.querySelector('span')?.textContent===label)?.querySelector('textarea'));
+        const fields=labels.map(label=>[...document.querySelectorAll('.modal .field')].find(element=>element.querySelector('span')?.textContent===label)?.querySelector('textarea'));
         if(fields.some(field=>!field||field.disabled))return false;
         const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
         fields.forEach((field,index)=>{setter.call(field,'검증 '+index);field.dispatchEvent(new Event('input',{bubbles:true}));});
@@ -512,6 +512,37 @@ async function createApplication(): Promise<void> {
       const colors=await mainWindow.webContents.executeJavaScript(`(()=>{const cards=[...document.querySelectorAll('.account-grid .account-card')];if(cards.length<2)return [];cards.forEach(card=>card.classList.remove('selected-account'));const normal=parseFloat(getComputedStyle(cards[0]).borderTopWidth);cards[0].classList.add('selected-account');const left=getComputedStyle(cards[0]).borderTopColor;cards[0].classList.remove('selected-account');cards[1].classList.add('selected-account');return [left,getComputedStyle(cards[1]).borderTopColor,parseFloat(getComputedStyle(cards[1]).borderTopWidth),normal];})()`);
       if(colors[0]!=='rgb(54, 184, 255)'||colors[1]!=='rgb(83, 229, 164)'||colors[2]<=colors[3])throw new Error(`계정 테두리 UI 검증 실패: ${JSON.stringify(colors)}`);
       console.log('ACCOUNT_COLORS_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='writing-input-click') {
+      await new Promise(resolve=>setTimeout(resolve,600));
+      await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(button=>button.textContent?.trim()==='운영정보')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,500));
+      for(const selector of ['#prompt-promotion','#prompt-common']){
+        const point=await mainWindow.webContents.executeJavaScript(`(()=>{const field=document.querySelector(${JSON.stringify(selector)});if(!field||field.disabled)return null;field.scrollIntoView({block:'center'});const r=field.getBoundingClientRect();return {x:Math.round(r.left+30),y:Math.round(r.top+24)};})()`);
+        if(!point)throw new Error(`입력 칸을 사용할 수 없습니다: ${selector}`);
+        mainWindow.webContents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});
+        mainWindow.webContents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});
+        await new Promise(resolve=>setTimeout(resolve,100));
+        const focused=await mainWindow.webContents.executeJavaScript(`document.activeElement===document.querySelector(${JSON.stringify(selector)})`);
+        if(!focused)throw new Error(`마우스 입력 포커스 실패: ${selector}`);
+        mainWindow.webContents.insertText('입력 확인');
+        await new Promise(resolve=>setTimeout(resolve,100));
+        const value=await mainWindow.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)})?.value`);
+        if(value!=='입력 확인')throw new Error(`텍스트 입력 실패: ${selector}`);
+      }
+      console.log('WRITING_INPUT_CLICK_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='writing-prompts-load-retry') {
+      await new Promise(resolve=>setTimeout(resolve,600));
+      await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(button=>button.textContent?.trim()==='운영정보')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,400));
+      const blocked=await mainWindow.webContents.executeJavaScript(`Boolean(document.querySelector('.prompt-load-status.failed button'))&&document.querySelector('#prompt-common')?.disabled&&document.querySelector('.modal button.primary')?.disabled`);
+      if(!blocked)throw new Error('불러오기 실패 시 입력 보호 검증 실패');
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('.prompt-load-status.failed button')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,400));
+      const recovered=await mainWindow.webContents.executeJavaScript(`!document.querySelector('#prompt-common')?.disabled&&!document.querySelector('.modal button.primary')?.disabled`);
+      if(!recovered)throw new Error('프롬프트 재시도 검증 실패');
+      console.log('WRITING_PROMPTS_RETRY_UI_TEST=PASS');
     }
     if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='collector-guide') {
       await mainWindow.webContents.executeJavaScript("document.querySelector('.extension-install-button')?.click()");

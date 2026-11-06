@@ -1205,3 +1205,9 @@ input:focus, select:focus, textarea:focus { box-shadow:0 0 0 2px var(--primary),
 .account-settings-save.pending { background:#ffe244; border-color:#ffe244; color:#171600; font-weight:700; box-shadow:0 0 12px #ffe24455; }
 .account-settings-save.saved { background:var(--surface-alt); border-color:var(--border); color:var(--muted); box-shadow:none; }
 @media (max-width: 1100px) { .account-grid > .account-card.selected-account:nth-child(even) { border-color:#36b8ff; box-shadow:0 0 0 2px #36b8ff50; } }
+
+/* 운영정보 입력 커서는 어두운 배경에서도 보이도록 대비를 높인다. */
+.modal .writing-instructions:not(:disabled) { cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='24' viewBox='0 0 20 24'%3E%3Cpath d='M5 3h10M10 3v18M5 21h10' fill='none' stroke='%23000' stroke-width='4'/%3E%3Cpath d='M5 3h10M10 3v18M5 21h10' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E") 10 12, text; caret-color:var(--primary); }
+.modal .writing-instructions:disabled { cursor:not-allowed; opacity:.65; }
+.prompt-load-status { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border:1px solid var(--border); border-radius:8px; color:var(--muted); }
+.prompt-load-status.failed { border-color:var(--danger); color:var(--text); background:color-mix(in srgb,var(--danger) 14%,var(--surface)); }

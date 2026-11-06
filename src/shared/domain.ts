@@ -464,6 +464,8 @@ export interface CodexUsageStatus {
 
 export interface DashboardSnapshot {
   automationRunning: boolean;
+  automationAllAccounts?: boolean;
+  automationRunningAccountIds?: string[];
   accountCount: number;
   automationAccountCount: number;
   todaySuccessCount: number;

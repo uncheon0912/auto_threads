@@ -22,6 +22,14 @@ function setup(bodies: string[]) {
 const lines = (count: number) => Array.from({ length: count }, (_, index) => `줄${index + 1}`).join('\n');
 
 describe('B style body line tolerance', () => {
+  it('tells the reviewer to treat weak hooks as feedback when the reply is useful', async () => {
+    const body='릴스 대행 얘기야';
+    const {pipeline, account, agent, reply}=setup([body]);
+    await expect(pipeline['createThreadSplit'](account as never,'run','원문')).resolves.toEqual({body,reply});
+    const reviewPrompt=agent.mock.calls[1][1];
+    expect(reviewPrompt).toContain('후킹이 약하거나 표현을 더 구체적으로 다듬을 수 있다는 이유만으로 반려하거나 vetoes를 추가하지 마라');
+    expect(reviewPrompt).toContain('과장·허위·금지 표현·광고 고지 누락은 반려한다');
+  });
   it.each([4, 5, 6])('accepts %i nonblank lines after formatting and runs review', async count => {
     const body = lines(count);
     const { pipeline, account, agent, reply } = setup([body]);
