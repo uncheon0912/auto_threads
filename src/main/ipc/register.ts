@@ -73,14 +73,14 @@ export function registerIpc(deps: Dependencies): void {
       const page=await deps.coupangCollector.research({sourceUrl:redirectResearch.affiliateUrl,maxImages:20,maxReviews:8});
       const identityFacts=[`productId=${page.productId}`,...(page.itemId?[`itemId=${page.itemId}`]:[]),...(page.vendorItemId?[`vendorItemId=${page.vendorItemId}`]:[])];
       return {...redirectResearch,productName:page.productTitleRaw??redirectResearch.productName,imageUrl:page.imageUrls[0],imageUrls:page.imageUrls,
-        excludedImages:page.unknownImageUrls.map((url,position)=>({url,position:page.imageUrls.length+position,reason:'unverified' as const})),
+        excludedImages:[...page.unknownImageUrls.map((url,position)=>({url,position:page.imageUrls.length+position,reason:'unverified' as const})),...page.smallImages.map((image,position)=>({...image,position:page.imageUrls.length+page.unknownImageUrls.length+position,reason:'too_small' as const}))],
         media:page.imageUrls.map((url,position)=>({type:'IMAGE' as const,url,position,source:'COUPANG_GALLERY' as const})),
         productFacts:[...new Set([...redirectResearch.productFacts,...identityFacts,...(page.productTitleRaw?[`상품명 원문=${page.productTitleRaw}`]:[])])],
         researchSourceUrls:[...new Set([...redirectResearch.researchSourceUrls,page.finalUrl])],
         reviewEvidence:page.reviews.map((review,index)=>({id:`page-review-${index+1}`,text:review.reviewTextRaw,
           ...(review.optionTextRaw?{option:review.optionTextRaw}:{}),...(review.rating?{rating:review.rating}:{})})),
         researchVersion:2,reviewCount:page.reviews.length,reviewCollectedAt:page.collectedAt,
-        metadataStatus:page.imageUrls.length?'READY' as const:'FAILED' as const,researchedAt:page.collectedAt,lastError:page.imageUrls.length?undefined:'이미지 크기를 확인하지 못했습니다. 확인 필요 이미지에서 직접 선택하세요.'};
+        metadataStatus:page.imageUrls.length?'READY' as const:'FAILED' as const,researchedAt:page.collectedAt,lastError:page.imageUrls.length?undefined:'자동 기준을 통과한 이미지가 없습니다. 검토 필요 이미지의 크기와 화질을 확인한 뒤 직접 선택하세요.'};
     } catch(error) {
       const message=error instanceof CoupangChromeCollectorError?error.message:'Chrome 쿠팡 수집기에서 상품 페이지를 확인하는 중 오류가 발생했습니다.';
       return {...redirectResearch,metadataStatus:'FAILED' as const,lastError:message,researchedAt:new Date().toISOString()};
@@ -112,9 +112,9 @@ export function registerIpc(deps: Dependencies): void {
     if(!prepared)throw new Error('분석한 쿠팡 상품을 다시 불러오지 못했습니다.');
     return prepared;
   };
-  const resolveNaverBrandResearch=async(affiliateUrl:string)=>{
+  const resolveNaverBrandResearch=async(affiliateUrl:string,onProgress?:(stage:string)=>void)=>{
     try{
-      const page=await deps.coupangCollector.researchNaverBrand({sourceUrl:affiliateUrl,maxImages:20,maxReviews:8});
+      const page=await deps.coupangCollector.researchNaverBrand({sourceUrl:affiliateUrl,maxImages:20,maxReviews:8},onProgress);
       return {affiliateUrl,urlFingerprint:parseNaverBrandProductInput(affiliateUrl).urlFingerprint,
         productName:page.productTitleRaw,imageUrl:page.imageUrls[0],imageUrls:page.imageUrls,
         excludedImages:page.unknownImageUrls.map((url,position)=>({url,position:page.imageUrls.length+position,reason:'unverified' as const})),
@@ -420,22 +420,36 @@ export function registerIpc(deps: Dependencies): void {
   });
   handle('coupang-queue:summary', z.string().uuid(), (accountId) => deps.repositories.coupangLinkSummary(accountId));
   handle('naver-brand-queue:list', z.string().uuid(), (accountId) => deps.repositories.listPendingNaverBrandLinks(accountId));
-  handle('naver-brand-queue:add', naverBrandQueueAddSchema, async ({accountId,text})=>{
+  handle('naver-brand-queue:add', naverBrandQueueAddSchema, async ({accountId,text,operationId})=>{
     const config=deps.repositories.listProviderConfigs(accountId).find((entry)=>entry.type==='NAVER_BRAND_CONNECT'&&entry.enabled);
     if(!config)throw new Error('계정관리에서 네이버 브랜드 커넥트 사용을 먼저 저장하세요.');
     const entries=[...new Set(text.split(/\r?\n/).map((value)=>value.trim()).filter(Boolean))];
     if(entries.length>100)throw new Error('네이버 브랜드 커넥트 상품 링크는 한 번에 최대 100개까지 등록할 수 있습니다.');
+    if(deps.safeUiTestMode&&process.env.THREADS_AUTO_UI_ACTION==='naver-progress-test'){
+      if(operationId&&!deps.window.isDestroyed())deps.window.webContents.send('naver-brand-queue:progress',{operationId,accountId,index:1,total:1,percent:12,message:'상품 페이지로 이동 중'});
+      await new Promise(resolve=>setTimeout(resolve,1200));
+      throw new Error('UI 검증용 수집 종료');
+    }
     const created:CoupangProductQueueItem[]=[];const failures:string[]=[];let savedForReview=0;
-    for(const entry of entries){
+    for(const [entryIndex,entry] of entries.entries()){
+      const report=(percent:number,message:string,itemId?:string)=>{if(operationId&&!deps.window.isDestroyed())deps.window.webContents.send('naver-brand-queue:progress',{operationId,accountId,index:entryIndex+1,total:entries.length,percent,message,itemId});};
+      report(2,'상품 링크 확인 중');
       let queued:CoupangProductQueueItem|undefined;
       try{
-        const parsed=parseNaverBrandProductInput(entry);const research=await resolveNaverBrandResearch(parsed.affiliateUrl);
+        const parsed=parseNaverBrandProductInput(entry);
+        const existing=deps.repositories.findProductLinkByFingerprint(accountId,parsed.urlFingerprint);
+        if(existing){const detail=existing.status==='COMPLETED'?'이미 발행된 상품입니다. 성과 리포트에서 확인하세요.':existing.status==='PROCESSING'?'현재 분석 중입니다.':`기존 상품이 ${({'QUEUED':'준비 대기','INFORMATION_REQUIRED':'정보 확인 필요','REVIEW_REQUIRED':'검토 필요','FAILED':'준비 실패','PREVIEW_READY':'발행 준비 완료'} as Record<string,string>)[existing.status]??'등록된 상태'}입니다. 목록에서 상세를 열어 확인하거나 재분석하세요.`;failures.push(`이미 등록된 네이버 브랜드 커넥트 상품 링크입니다. ${detail}`);continue;}
+        report(4,'Chrome 수집기 대기 중');
+        const stages:Record<string,{percent:number;message:string}>={OPENING_AFFILIATE_LINK:{percent:8,message:'제휴 링크 여는 중'},AFFILIATE_REDIRECT:{percent:12,message:'상품 페이지로 이동 중'},PRODUCT_PAGE_LOADING:{percent:18,message:'상품 페이지 불러오는 중'},CONTENT_SCRIPT_WAIT:{percent:22,message:'상품 정보 확인 대기 중'},COLLECTING_PRODUCT_PAGE:{percent:27,message:'이미지와 후기 수집 중'}};
+        const research=await resolveNaverBrandResearch(parsed.affiliateUrl,stage=>{const next=stages[stage];if(next)report(next.percent,next.message);});
+        report(30,'수집 결과 확인 중');
         queued=deps.repositories.createCoupangLink({accountId,providerType:'NAVER_BRAND_CONNECT',originalInputType:'PLAIN_LINK',productNote:'',...research});
         if(research.metadataStatus!=='READY'){savedForReview+=1;failures.push(research.lastError||'네이버 상품 페이지에서 이미지와 상품 정보를 확인하지 못했습니다.');continue;}
+        report(30,'본문 작성과 검수 준비 중',queued.id);
         await deps.pipeline.prepareManualNaverBrand(accountId,queued.id);
         const prepared=deps.repositories.getNaverBrandLink(queued.id,accountId);
         if(prepared?.status!=='PREVIEW_READY'||!prepared.draftPostId)throw new Error('이미지와 최종 발행 본문 준비가 완료되지 않았습니다.');
-        created.push(prepared);
+        created.push(prepared);report(100,'상품 준비 완료',queued.id);
       }catch(error){if(queued)deps.repositories.abortNewCoupangRegistration(queued.id,accountId);const message=error instanceof Error?error.message:String(error);failures.push(/UNIQUE constraint failed/i.test(message)?'이미 등록된 네이버 브랜드 커넥트 상품 링크입니다.':message);}
     }
     if(failures.length){const summary=`${created.length}건 준비 완료 · ${failures.length}건 실패 · ${savedForReview}건 검토 필요 목록에 보관했습니다.`;deps.repositories.addLog('WARN','NAVER_BRAND_CONNECT',summary,failures.join('\n'),accountId);throw new Error(`${summary} ${failures[0]}`);}
@@ -462,7 +476,7 @@ export function registerIpc(deps: Dependencies): void {
   handle('naver-brand-queue:prepare', coupangQueueItemSchema, ({accountId,id})=>prepareNaverBrandQueueItem(accountId,id));
   handle('naver-brand-queue:retry', coupangQueueItemSchema, async ({accountId,id})=>{const current=deps.repositories.getNaverBrandLink(id,accountId);if(!current)throw new Error('네이버 브랜드 커넥트 상품 링크를 찾을 수 없습니다.');deps.repositories.retryCoupangLink(id,accountId);await refreshNaverBrandQueueResearch(accountId,id);await deps.pipeline.prepareManualNaverBrand(accountId,id);return deps.repositories.getNaverBrandLink(id,accountId);});
   handle('naver-brand-queue:summary', z.string().uuid(), (accountId)=>deps.repositories.naverBrandLinkSummary(accountId));
-  handle('coupang-collector:status', undefined, async () => { const status=deps.coupangCollector.status();return {...status,installed:status.connected||await hasChromeCollectorInstalled()}; });
+  handle('coupang-collector:status', undefined, async () => { const status=deps.coupangCollector.status();if(deps.safeUiTestMode&&process.env.THREADS_AUTO_UI_ACTION==='naver-progress-test')return {...status,connected:true,installed:true,message:'UI 검증용 수집기'};return {...status,installed:status.connected||await hasChromeCollectorInstalled()}; });
   handle('coupang-collector:acknowledge-prompt', undefined, () => deps.coupangCollector.acknowledgePrompt());
   const extensionInstallation = () => app.isPackaged
     ? prepareExtensionInstallation(path.join(process.resourcesPath, 'chrome-extension'), path.join(app.getPath('userData'), 'extensions', 'chrome-extension'))
@@ -628,7 +642,7 @@ export function registerIpc(deps: Dependencies): void {
     const post = await deps.pipeline.preview(previewAccount, source);
     return { post, run:deps.repositories.listPipelineRuns(accountId, 1)[0] };
   });
-  handle('content:publish-now', immediatePublishSchema, async ({accountId,sourceType}) => {
+  handle('content:publish-now', immediatePublishSchema, async ({accountId,sourceType,publicationStyle}) => {
     if(deps.safeUiTestMode)throw new Error('안전 UI 테스트 모드에서는 실제 Threads 즉시 발행을 실행할 수 없습니다.');
     const modelError=codexModelSelectionError((await deps.settings.read()).codex.model);if(modelError)throw new Error(modelError);
     const account=deps.repositories.getAccount(accountId);
@@ -670,7 +684,7 @@ export function registerIpc(deps: Dependencies): void {
     }
     if(sourceType==='NAVER_BRAND_CONNECT'&&deps.repositories.naverBrandLinkSummary(accountId).byStatus.PREVIEW_READY<1)throw new Error('발행 준비가 완료된 네이버 브랜드 커넥트 상품이 없습니다. 네이버 브랜드 커넥트 메뉴에서 상품 링크를 분석해 주세요.');
     deps.repositories.addLog('INFO','PUBLISH',`${sourceType==='YOUTUBE'?'YouTube':sourceType==='BLOG'?'블로그':sourceType==='COUPANG'?'쿠팡':sourceType==='NAVER_BRAND_CONNECT'?'네이버 브랜드 커넥트':'일상'} 즉시 발행을 시작합니다.`,undefined,accountId);
-    return deps.pipeline.publishNow(account,sourceType as SourceType);
+    return deps.pipeline.publishNow(account,sourceType as SourceType,publicationStyle);
   });
   handle('content:publish-prepared-daily', preparedDailyPublishSchema, async ({accountId,postId}) => {
     if(deps.safeUiTestMode)throw new Error('안전 UI 테스트 모드에서는 실제 Threads 발행을 실행할 수 없습니다.');

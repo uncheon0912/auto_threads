@@ -327,6 +327,11 @@ const migrations = [
    ALTER TABLE pipeline_runs ADD COLUMN ai_output_tokens INTEGER NOT NULL DEFAULT 0;`,
   `ALTER TABLE coupang_link_queue ADD COLUMN excluded_images_json TEXT NOT NULL DEFAULT '[]';
    CREATE TABLE product_queue_trash (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, provider_type TEXT NOT NULL, data_json TEXT NOT NULL, deleted_at TEXT NOT NULL);`,
+  `ALTER TABLE accounts ADD COLUMN publication_style TEXT NOT NULL DEFAULT 'A';
+   ALTER TABLE posts ADD COLUMN first_reply_body TEXT;
+   ALTER TABLE posts ADD COLUMN first_reply_id TEXT;
+   ALTER TABLE posts ADD COLUMN first_reply_status TEXT NOT NULL DEFAULT 'NONE';
+   ALTER TABLE posts ADD COLUMN first_reply_error TEXT;`,
 ];
 
 export class AppDatabase {
@@ -353,6 +358,7 @@ export class AppDatabase {
       .run(new Date().toISOString());
     this.raw.prepare("UPDATE pipeline_runs SET status='STOPPED', stage='DONE', progress=100, message='앱 종료로 작업이 중단되었습니다.', error_summary='이전 실행 중 앱이 종료되어 작업 상태를 중단으로 복구했습니다.', updated_at=?, finished_at=? WHERE status IN ('RUNNING','QUEUED')")
       .run(new Date().toISOString(), new Date().toISOString());
+    this.raw.prepare("UPDATE posts SET first_reply_status='UNCERTAIN',first_reply_error='앱 종료로 댓글 발행 결과 확인이 필요합니다.' WHERE first_reply_status='PENDING'").run();
     this.raw.prepare("UPDATE threads_integration_runs SET status='CLEANUP_NEEDED', cleanup_needed=1, stage='RECOVERY', message='이전 실행이 중단되어 원격 테스트 항목 확인이 필요합니다.', error_summary='앱 종료로 통합 테스트가 중단되었습니다.', updated_at=? WHERE status='RUNNING'")
       .run(new Date().toISOString());
   }

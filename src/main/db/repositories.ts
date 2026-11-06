@@ -71,6 +71,7 @@ function accountFromRow(row: any): Account {
     tone: row.tone,
     audience: row.audience,
     writingInstructions: row.writing_instructions ?? '',
+    publicationStyle:row.publication_style==='B'?'B':'A',
     forbiddenTopics: row.forbidden_topics,
     forbiddenExpressions: row.forbidden_expressions,
     dailyEnabled: bool(row.daily_enabled),
@@ -243,7 +244,7 @@ function coupangLinkFromRow(row:any):CoupangProductQueueItem {
     affiliateUrl:row.affiliate_url, urlFingerprint:row.url_fingerprint,
     productName:row.product_name ?? undefined, productNote:row.product_note, imageUrl:storedMedia.imageUrl,
     imageUrls:storedMedia.imageUrls, media:storedMedia.media,
-    excludedImages:json<Array<{url:string;position:number;reason?:'unverified'}>>(row.excluded_images_json??'[]',[]),
+    excludedImages:json<Array<{url:string;position:number;reason?:'unverified'|'too_small';width?:number;height?:number}>>(row.excluded_images_json??'[]',[]),
     productFacts:json<string[]>(row.product_facts_json, []), researchSourceUrls:json<string[]>(row.research_source_urls_json, []),
     reviewEvidence, researchVersion:Number(row.research_version ?? 1), reviewCount:Number(row.review_count ?? reviewEvidence.length),
     reviewCollectedAt:row.review_collected_at ?? undefined,
@@ -264,6 +265,8 @@ function postFromRow(row:any):PostRecord {
     id:row.id, accountId:row.account_id, sourceId:row.source_id ?? undefined, sourceType:row.source_type,
     body:row.body, url:row.url ?? undefined, imageUrl:storedMedia.imageUrl, imageUrls:storedMedia.imageUrls, media:storedMedia.media,
     threadsPostId:row.threads_post_id ?? undefined, remoteDeletedAt:row.remote_deleted_at ?? undefined,
+    firstReplyBody:row.first_reply_body ?? undefined,firstReplyId:row.first_reply_id ?? undefined,
+    firstReplyStatus:row.first_reply_status ?? 'NONE',firstReplyError:row.first_reply_error ?? undefined,
     coupangReplyBody:row.coupang_reply_body ?? undefined, coupangReplyId:row.coupang_reply_id ?? undefined,
     coupangReplyStatus:row.coupang_reply_status ?? 'NONE', coupangReplyError:row.coupang_reply_error ?? undefined,
     coupangReplyPublishedAt:row.coupang_reply_published_at ?? undefined,
@@ -283,7 +286,7 @@ export interface CoupangLinkCreateInput {
   productNote?:string;
   imageUrl?:string;
   imageUrls?:string[];
-  excludedImages?:Array<{url:string;position:number;reason?:'unverified'}>;
+  excludedImages?:Array<{url:string;position:number;reason?:'unverified'|'too_small';width?:number;height?:number}>;
   media?:MediaAsset[];
   productFacts?:string[];
   researchSourceUrls?:string[];
@@ -334,11 +337,11 @@ export class Repositories {
       INSERT INTO accounts (
         id,threads_user_id,name,threads_handle,topic,personality,tone,audience,writing_instructions,forbidden_topics,forbidden_expressions,
         daily_enabled,promotion_enabled,automation_target,active,daily_ratio,promotion_ratio,daily_post_target,
-        operation_start,operation_end,weekdays_json,comments_enabled,comment_interval_minutes,fixed_link_enabled,fixed_link_url,created_at,updated_at
+        operation_start,operation_end,weekdays_json,comments_enabled,comment_interval_minutes,fixed_link_enabled,fixed_link_url,created_at,updated_at,publication_style
       ) VALUES (
         @id,@threadsUserId,@name,@threadsHandle,@topic,@personality,@tone,@audience,@writingInstructions,@forbiddenTopics,@forbiddenExpressions,
         @dailyEnabled,@promotionEnabled,@automationTarget,@active,@dailyRatio,@promotionRatio,@dailyPostTarget,
-        @operationStart,@operationEnd,@weekdays,@commentsEnabled,@commentIntervalMinutes,@fixedLinkEnabled,@fixedLinkUrl,@createdAt,@updatedAt
+        @operationStart,@operationEnd,@weekdays,@commentsEnabled,@commentIntervalMinutes,@fixedLinkEnabled,@fixedLinkUrl,@createdAt,@updatedAt,@publicationStyle
       ) ON CONFLICT(id) DO UPDATE SET
         name=excluded.name, threads_handle=excluded.threads_handle, topic=excluded.topic,
         personality=excluded.personality, tone=excluded.tone, audience=excluded.audience, writing_instructions=excluded.writing_instructions,
@@ -349,10 +352,11 @@ export class Repositories {
         daily_post_target=excluded.daily_post_target, operation_start=excluded.operation_start,
         operation_end=excluded.operation_end, weekdays_json=excluded.weekdays_json,
         comments_enabled=excluded.comments_enabled, comment_interval_minutes=excluded.comment_interval_minutes,
-        fixed_link_enabled=excluded.fixed_link_enabled, fixed_link_url=excluded.fixed_link_url,
+        fixed_link_enabled=excluded.fixed_link_enabled, fixed_link_url=excluded.fixed_link_url,publication_style=excluded.publication_style,
         updated_at=excluded.updated_at
     `).run({
       ...input,
+      publicationStyle:input.publicationStyle ?? existing?.publicationStyle ?? 'A',
       writingInstructions: input.writingInstructions ?? existing?.writingInstructions ?? '',
       id,
       threadsUserId: input.threadsUserId ?? existing?.threadsUserId ?? null,
@@ -492,6 +496,11 @@ export class Repositories {
 
   getNaverBrandLink(id:string,accountId:string):CoupangProductQueueItem|undefined { return this.getProductLink(id,accountId,'NAVER_BRAND_CONNECT'); }
 
+  findProductLinkByFingerprint(accountId:string,fingerprint:string):CoupangProductQueueItem|undefined {
+    const row=this.db.raw.prepare('SELECT id FROM coupang_link_queue WHERE account_id=? AND url_fingerprint=?').get(accountId,fingerprint) as {id:string}|undefined;
+    return row?this.getAnyProductLink(row.id,accountId):undefined;
+  }
+
   listCoupangLinks(accountId:string):CoupangProductQueueItem[] {
     return this.db.raw.prepare(`SELECT q.*,p.body draft_body,p.coupang_reply_body draft_reply_body,
       p.coupang_reply_status draft_reply_status FROM coupang_link_queue q LEFT JOIN posts p ON p.id=q.draft_post_id
@@ -605,7 +614,7 @@ export class Repositories {
       if(!source)throw new Error('연결된 상품 자료를 찾을 수 없습니다.');
       const selected=new Set(imageUrls), excluded=current.excludedImages??[];
       if(restore?imageUrls.some(url=>!excluded.some(item=>item.url===url)):imageUrls.some(url=>!current.imageUrls.includes(url)))throw new Error('선택한 이미지가 현재 목록과 다릅니다.');
-      let urls=[...current.imageUrls];let nextExcluded:Array<{url:string;position:number;reason?:'unverified'}>;
+      let urls=[...current.imageUrls];let nextExcluded:Array<{url:string;position:number;reason?:'unverified'|'too_small';width?:number;height?:number}>;
       if(restore){
         const entries=excluded.filter(item=>selected.has(item.url)).sort((a,b)=>a.position-b.position);
         if(urls.length+entries.length>20)throw new Error('발행 이미지는 최대 20장까지 복원할 수 있습니다.');
@@ -677,7 +686,7 @@ export class Repositories {
     return this.getAnyProductLink(id,accountId)!;
   }
 
-  applyCoupangLinkResearch(id:string,accountId:string,research:{affiliateUrl:string;urlFingerprint:string;productName?:string;imageUrl?:string;imageUrls?:string[];media?:MediaAsset[];excludedImages?:Array<{url:string;position:number;reason?:'unverified'}>;productFacts:string[];researchSourceUrls:string[];reviewEvidence?:CoupangReviewEvidence[];researchVersion?:number;reviewCount?:number;reviewCollectedAt?:string;metadataStatus:CoupangMetadataStatus;researchedAt:string;lastError?:string}):CoupangProductQueueItem {
+  applyCoupangLinkResearch(id:string,accountId:string,research:{affiliateUrl:string;urlFingerprint:string;productName?:string;imageUrl?:string;imageUrls?:string[];media?:MediaAsset[];excludedImages?:Array<{url:string;position:number;reason?:'unverified'|'too_small';width?:number;height?:number}>;productFacts:string[];researchSourceUrls:string[];reviewEvidence?:CoupangReviewEvidence[];researchVersion?:number;reviewCount?:number;reviewCollectedAt?:string;metadataStatus:CoupangMetadataStatus;researchedAt:string;lastError?:string}):CoupangProductQueueItem {
     const current=this.getAnyProductLink(id,accountId);
     if (!current) throw new Error('쿠팡 상품 링크를 찾을 수 없습니다.');
     if (current.status==='PROCESSING'||current.status==='COMPLETED') throw new Error('처리 중이거나 완료된 쿠팡 상품 정보는 변경할 수 없습니다.');
@@ -1144,6 +1153,11 @@ export class Repositories {
         coupangReplyDeletedAt:post.coupangReplyDeletedAt ?? null, publishedAt:post.publishedAt ?? null });
   }
 
+  recordFirstReply(postId:string,accountId:string,body:string,status:'PENDING'|'PUBLISHED'|'FAILED'|'UNCERTAIN'|'STOPPED',replyId?:string,error?:string):void {
+    const changed=this.db.raw.prepare('UPDATE posts SET first_reply_body=?,first_reply_status=?,first_reply_id=?,first_reply_error=? WHERE id=? AND account_id=? AND threads_post_id IS NOT NULL').run(body,status,replyId??null,error?.slice(0,1000)??null,postId,accountId).changes;
+    if(!changed)throw new Error('발행된 본문의 댓글 상태를 저장하지 못했습니다.');
+  }
+
   updateUnpublishedPostBody(postId:string,accountId:string,body:string):PostRecord {
     const changed=this.db.raw.prepare('UPDATE posts SET body=? WHERE id=? AND account_id=? AND threads_post_id IS NULL')
       .run(formatThreadsPostText(body),postId,accountId).changes;
@@ -1151,11 +1165,11 @@ export class Repositories {
     return this.getPost(postId)!;
   }
 
-  markPreparedPostPublished(postId:string,accountId:string,threadsPostId:string,publishedAt=new Date().toISOString()):PostRecord {
-    const changed=this.db.raw.prepare(`UPDATE posts SET threads_post_id=?,published_at=?,remote_deleted_at=NULL,
+  markPreparedPostPublished(postId:string,accountId:string,threadsPostId:string,publishedAt=new Date().toISOString(),publishedBody?:string):PostRecord {
+    const changed=this.db.raw.prepare(`UPDATE posts SET threads_post_id=?,published_at=?,body=COALESCE(?,body),remote_deleted_at=NULL,
       coupang_reply_status=CASE WHEN coupang_reply_body IS NULL THEN 'NONE' ELSE 'PENDING' END,
       coupang_reply_id=NULL,coupang_reply_error=NULL,coupang_reply_published_at=NULL,coupang_reply_deleted_at=NULL
-      WHERE id=? AND account_id=? AND threads_post_id IS NULL`).run(threadsPostId,publishedAt,postId,accountId).changes;
+      WHERE id=? AND account_id=? AND threads_post_id IS NULL`).run(threadsPostId,publishedAt,publishedBody??null,postId,accountId).changes;
     if(!changed)throw new Error('발행할 준비본을 찾을 수 없거나 이미 발행된 항목입니다.');
     return this.getPost(postId)!;
   }

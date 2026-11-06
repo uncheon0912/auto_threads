@@ -69,6 +69,7 @@ export interface Account {
   tone: string;
   audience: string;
   writingInstructions: string;
+  publicationStyle?: 'A'|'B';
   forbiddenTopics: string;
   forbiddenExpressions: string;
   dailyEnabled: boolean;
@@ -185,7 +186,7 @@ export interface CoupangProductQueueItem {
   imageUrl?: string;
   imageUrls: string[];
   media: MediaAsset[];
-  excludedImages?: Array<{url:string;position:number;reason?:'unverified'}>;
+  excludedImages?: Array<{url:string;position:number;reason?:'unverified'|'too_small';width?:number;height?:number}>;
   productFacts: string[];
   researchSourceUrls: string[];
   reviewEvidence: CoupangReviewEvidence[];
@@ -249,6 +250,10 @@ export interface PostRecord {
   imageUrls?: string[];
   media?: MediaAsset[];
   threadsPostId?: string;
+  firstReplyBody?: string;
+  firstReplyId?: string;
+  firstReplyStatus?: 'NONE'|'PENDING'|'PUBLISHED'|'FAILED'|'UNCERTAIN'|'STOPPED';
+  firstReplyError?: string;
   coupangReplyBody?: string;
   coupangReplyId?: string;
   coupangReplyStatus?: CoupangReplyStatus;

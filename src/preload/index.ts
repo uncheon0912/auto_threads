@@ -50,7 +50,8 @@ const api = {
   },
   naverBrandQueue: {
     list: (accountId: string) => ipcRenderer.invoke('naver-brand-queue:list', accountId) as Promise<CoupangProductQueueItem[]>,
-    add: (input: { accountId:string; text:string }) => ipcRenderer.invoke('naver-brand-queue:add', input) as Promise<CoupangProductQueueItem[]>,
+    onProgress:(callback:(progress:{operationId:string;accountId:string;index:number;total:number;percent:number;message:string;itemId?:string})=>void)=>{const listener=(_event:Electron.IpcRendererEvent,progress:{operationId:string;accountId:string;index:number;total:number;percent:number;message:string;itemId?:string})=>callback(progress);ipcRenderer.on('naver-brand-queue:progress',listener);return()=>{ipcRenderer.removeListener('naver-brand-queue:progress',listener);};},
+    add: (input: { accountId:string; text:string; operationId?:string }) => ipcRenderer.invoke('naver-brand-queue:add', input) as Promise<CoupangProductQueueItem[]>,
     updateDraft: (input: { accountId:string; id:string; body:string; expectedUpdatedAt:string }) => ipcRenderer.invoke('naver-brand-queue:update-draft', input) as Promise<CoupangProductQueueItem>,
     removeImage: (input: { accountId:string; id:string; imageUrl:string; expectedUpdatedAt:string }) => ipcRenderer.invoke('naver-brand-queue:remove-image', input) as Promise<CoupangProductQueueItem>,
     images: (input:{accountId:string;id:string;imageUrls:string[];expectedUpdatedAt:string;restore:boolean})=>ipcRenderer.invoke('naver-brand-queue:images',input) as Promise<CoupangProductQueueItem>,
@@ -103,7 +104,7 @@ const api = {
   content: {
     discover: (accountId:string, type:'YOUTUBE'|'BLOG') => ipcRenderer.invoke('content:discover', { accountId, type }) as Promise<SourceCandidate[]>,
     preview: (accountId:string, sourceId?:string) => ipcRenderer.invoke('content:preview', { accountId, sourceId }) as Promise<{ post?:PostRecord; run:PipelineRunView }>,
-    publishNow: (accountId:string, sourceType:SourceType) => ipcRenderer.invoke('content:publish-now', { accountId, sourceType }) as Promise<PipelineRunView>,
+    publishNow: (accountId:string, sourceType:SourceType,publicationStyle?:'A'|'B') => ipcRenderer.invoke('content:publish-now', { accountId, sourceType,publicationStyle }) as Promise<PipelineRunView>,
     publishPreparedDaily: (accountId:string, postId:string) => ipcRenderer.invoke('content:publish-prepared-daily', { accountId, postId }) as Promise<PipelineRunView>,
     post: (accountId:string, postId:string) => ipcRenderer.invoke('content:post', { accountId, postId }) as Promise<PostRecord>,
   },

@@ -8,6 +8,7 @@ const accountInputShape = {
   id: z.string().uuid().optional(), name: z.string().trim().min(1).max(100), threadsHandle: z.string().trim().max(100),
   topic: z.string().trim().max(500), personality: z.string().max(1000), tone: z.string().max(1000), audience: z.string().max(1000),
   writingInstructions: z.string().max(12000).default(''), forbiddenTopics: z.string().max(2000), forbiddenExpressions: z.string().max(2000), dailyEnabled: z.boolean(), promotionEnabled: z.boolean(),
+  publicationStyle:z.enum(['A','B']).optional(),
   automationTarget: z.boolean(), active: z.boolean(), dailyRatio: z.number().int().min(0).max(100), promotionRatio: z.number().int().min(0).max(100),
   dailyPostTarget: z.number().int().min(1).max(50), operationStart: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), operationEnd: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
   weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7), commentsEnabled: z.boolean().default(true), commentIntervalMinutes: z.number().int().min(5).max(1440),
@@ -24,6 +25,7 @@ export const threadsTokenUpdateSchema = z.object({ accountId:z.string().uuid(), 
 export const immediatePublishSchema = z.object({
   accountId:z.string().uuid(),
   sourceType:z.enum(['DAILY','YOUTUBE','BLOG','COUPANG','NAVER_BRAND_CONNECT']),
+  publicationStyle:z.enum(['A','B']).optional(),
 }).strict();
 export const preparedDailyPublishSchema = z.object({ accountId:z.string().uuid(), postId:z.string().uuid() }).strict();
 export const promotionScheduleUpdateSchema = z.object({
@@ -130,4 +132,5 @@ export const coupangQueueImageRemoveSchema = z.object({
 export const naverBrandQueueAddSchema=z.object({
   accountId:z.string().uuid(),
   text:z.string().trim().min(1,'네이버 브랜드 커넥트 상품 링크를 입력하세요.').max(100_000),
+  operationId:z.string().uuid().optional(),
 }).strict();

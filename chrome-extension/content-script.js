@@ -73,7 +73,7 @@
   async function verifyImageQuality(urls) {
     const probes=await Promise.all(urls.map(url=>new Promise(resolve=>{
       const image=new Image();let finished=false;
-      const done=state=>{if(finished)return;finished=true;resolve({url,state});};
+      const done=state=>{if(finished)return;finished=true;resolve({url,state,width:image.naturalWidth||0,height:image.naturalHeight||0});};
       image.onload=()=>done(Math.min(image.naturalWidth,image.naturalHeight)>=600?'accepted':'too_small');
       image.onerror=()=>done('unknown');
       setTimeout(()=>done('unknown'),6000);
@@ -81,6 +81,7 @@
     })));
     return {imageUrls:probes.filter(item=>item.state==='accepted').map(item=>item.url),
       unknownImageUrls:probes.filter(item=>item.state==='unknown').map(item=>item.url),
+      smallImages:probes.filter(item=>item.state==='too_small').map(({url,width,height})=>({url,width,height})),
       rejectedImageCount:probes.filter(item=>item.state==='too_small').length,qualityChecked:true};
   }
 
@@ -90,20 +91,19 @@
       '.prod-image__item img, .prod-image__detail img, #repImageContainer img',
       '[class*="product-image"] img, [class*="prod-image"] img'
     ];
-    const results = [];
-    const seen = new Set();
+    const results = new Map();
     for (const selectors of selectorGroups) {
       for (const image of document.querySelectorAll(selectors)) {
         const normalized = normalizeImage(imageSource(image));
         if (!normalized) continue;
         const identity = imageIdentity(normalized);
-        if (seen.has(identity)) continue;
-        seen.add(identity);
-        results.push(normalized);
-        if (results.length >= maxImages) return results;
+        const dimensions=normalized.match(/\/(\d+)x(\d+)ex\//i);
+        const score=Math.max((image.naturalWidth||0)*(image.naturalHeight||0),dimensions?Number(dimensions[1])*Number(dimensions[2]):0);
+        const previous=results.get(identity);
+        if(!previous||score>previous.score)results.set(identity,{url:normalized,score});
       }
     }
-    return results;
+    return [...results.values()].slice(0,maxImages).map(item=>item.url);
   }
 
   function productTitle() {
@@ -228,6 +228,36 @@
     throw error;
   }
 
+  // 상품 갤러리에서 각 미리보기를 선택해 실제 표시되는 큰 사진만 수집한다.
+  // 썸네일과 큰 사진의 원본 식별자가 일치해야 하므로 이전 사진이나 추천 상품을 섞지 않는다.
+  async function collectGalleryImages(initialImages, maxImages, expectedIdentity) {
+    const results = new Map(initialImages.map(url => [imageIdentity(url), url]));
+    const thumbnails = [...document.querySelectorAll('li img[class~="twc-w-[70px]"]')].slice(0, maxImages);
+    for (const thumbnail of thumbnails) {
+      const source = normalizeImage(imageSource(thumbnail));
+      if (!source || !results.has(imageIdentity(source))) continue;
+      const denied = restriction();
+      if (denied) throw Object.assign(new Error(denied.message), { code: denied.code });
+      const current = currentIdentity();
+      if (!current || current.productId !== expectedIdentity.productId || current.itemId !== expectedIdentity.itemId || current.vendorItemId !== expectedIdentity.vendorItemId) {
+        const error = new Error('상품 페이지가 바뀌어 이미지 수집을 중단했습니다.');
+        error.code = 'PRODUCT_IDENTITY_MISMATCH';
+        throw error;
+      }
+      thumbnail.click();
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await delay(100);
+        const main = document.querySelector('img[alt="Product image"]');
+        const selected = main ? normalizeImage(imageSource(main)) : null;
+        if (selected && main.complete && main.naturalWidth > 0 && imageIdentity(selected) === imageIdentity(source)) {
+          results.set(imageIdentity(source), selected);
+          break;
+        }
+      }
+    }
+    return [...results.values()].slice(0, maxImages);
+  }
+
   async function collectPage(request) {
     const identity = currentIdentity();
     const matches = identity && identity.productId === request.productId
@@ -240,8 +270,10 @@
     }
     const denied = restriction();
     if (denied) throw Object.assign(new Error(denied.message), { code: denied.code });
-    const quality = await verifyImageQuality(await waitForProductImages(request.maxImages));
-    if(!quality.imageUrls.length&&!quality.unknownImageUrls.length){const error=new Error(`600픽셀 이상 이미지를 확인하지 못했습니다. 작은 이미지 ${quality.rejectedImageCount}장입니다.`);error.code='IMAGE_QUALITY_UNAVAILABLE';throw error;}
+    const initialImages = await waitForProductImages(request.maxImages);
+    const galleryImages = await collectGalleryImages(initialImages, request.maxImages, identity);
+    const quality = await verifyImageQuality(galleryImages);
+    if(!quality.imageUrls.length&&!quality.unknownImageUrls.length&&!quality.smallImages.length){const error=new Error('상품 이미지를 확인하지 못했습니다.');error.code='IMAGE_QUALITY_UNAVAILABLE';throw error;}
     const reviewSection = await waitForReviewSection();
     if (reviewSection) {
       reviewSection.scrollIntoView({ block: 'start', behavior: 'auto' });

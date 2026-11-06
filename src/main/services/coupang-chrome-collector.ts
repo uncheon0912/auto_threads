@@ -50,7 +50,7 @@ type StoredState={promptAcknowledged?:boolean;lastConnectedAt?:string;extensionV
 type CollectorReview={reviewTextRaw:string;optionTextRaw?:string;rating?:number};
 export interface CoupangChromeCollectionResult {
   finalUrl:string;productId:string;itemId?:string;vendorItemId?:string;productTitleRaw?:string;imageUrls:string[];
-  unknownImageUrls:string[];
+  unknownImageUrls:string[];smallImages:Array<{url:string;width:number;height:number}>;
   reviews:CollectorReview[];collectedAt:string;
 }
 export interface NaverBrandChromeCollectionResult {
@@ -62,7 +62,7 @@ export interface NaverBrandChromeCollectionResult {
 export function createCoupangNativeHostManifest(hostExecutablePath:string):Record<string,unknown>{
   return {allowed_origins:[COUPANG_COLLECTOR_ALLOWED_ORIGIN],description:'Threads Auto Coupang collector',name:COUPANG_COLLECTOR_NATIVE_HOST,path:path.resolve(hostExecutablePath),type:'stdio'};
 }
-type PendingRequest={provider:'COUPANG'|'NAVER_BRAND_CONNECT';sourceUrl:string;resolve:(value:any)=>void;reject:(reason:Error)=>void;timer:ReturnType<typeof setTimeout>};
+type PendingRequest={provider:'COUPANG'|'NAVER_BRAND_CONNECT';sourceUrl:string;resolve:(value:any)=>void;reject:(reason:Error)=>void;timer:ReturnType<typeof setTimeout>;onProgress?:(stage:string)=>void};
 
 export class CoupangChromeCollectorError extends Error {
   constructor(public readonly code:string,message:string,options?:ErrorOptions){super(message,options);this.name='CoupangChromeCollectorError';}
@@ -173,14 +173,14 @@ export class CoupangChromeCollectorService {
     this.tail=run.then(()=>undefined,()=>undefined);return run;
   }
 
-  researchNaverBrand(input:{sourceUrl:string;maxImages?:number;maxReviews?:number}):Promise<NaverBrandChromeCollectionResult>{
-    const run=this.tail.then(()=>this.collectOnce(input,'NAVER_BRAND_CONNECT'),()=>this.collectOnce(input,'NAVER_BRAND_CONNECT'));
+  researchNaverBrand(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},onProgress?:(stage:string)=>void):Promise<NaverBrandChromeCollectionResult>{
+    const run=this.tail.then(()=>this.collectOnce(input,'NAVER_BRAND_CONNECT',onProgress),()=>this.collectOnce(input,'NAVER_BRAND_CONNECT',onProgress));
     this.tail=run.then(()=>undefined,()=>undefined);return run;
   }
 
   private async collectOnce(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'COUPANG'):Promise<CoupangChromeCollectionResult>;
-  private async collectOnce(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'NAVER_BRAND_CONNECT'):Promise<NaverBrandChromeCollectionResult>;
-  private async collectOnce(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'COUPANG'|'NAVER_BRAND_CONNECT'):Promise<CoupangChromeCollectionResult|NaverBrandChromeCollectionResult>{
+  private async collectOnce(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'NAVER_BRAND_CONNECT',onProgress?:(stage:string)=>void):Promise<NaverBrandChromeCollectionResult>;
+  private async collectOnce(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'COUPANG'|'NAVER_BRAND_CONNECT',onProgress?:(stage:string)=>void):Promise<CoupangChromeCollectionResult|NaverBrandChromeCollectionResult>{
     const sourceUrl=typeof input.sourceUrl==='string'?input.sourceUrl.trim():'';
     const valid=provider==='COUPANG'?isCoupangAffiliateUrl(sourceUrl):isNaverBrandAffiliateUrl(sourceUrl);
     if(!sourceUrl||sourceUrl.length>2_000||!valid)throw new CoupangChromeCollectorError('INVALID_PRODUCT_LINK',provider==='COUPANG'?'쿠팡 파트너스 상품 링크가 올바르지 않습니다.':'네이버 브랜드 커넥트에서 발급한 naver.me 상품 링크가 올바르지 않습니다.');
@@ -192,7 +192,7 @@ export class CoupangChromeCollectorService {
       maxReviews:Math.max(0,Math.min(8,Math.trunc(input.maxReviews??8)))};
     return new Promise<CoupangChromeCollectionResult>((resolve,reject)=>{
       const timer=setTimeout(()=>{this.pending.delete(requestId);reject(new CoupangChromeCollectorError('COLLECTION_TIMEOUT','Chrome에서 쿠팡 상품 정보를 가져오는 시간이 초과되었습니다. 열린 상품 페이지를 확인하세요.'));},this.options.timeoutMs??60_000);
-      this.pending.set(requestId,{provider,sourceUrl,resolve,reject,timer});
+      this.pending.set(requestId,{provider,sourceUrl,resolve,reject,timer,onProgress});
       this.socket!.write(`${JSON.stringify(request)}\n`,error=>{if(!error)return;clearTimeout(timer);this.pending.delete(requestId);reject(new CoupangChromeCollectorError('NATIVE_HOST_WRITE_FAILED','Chrome 쿠팡 수집기에 요청을 보내지 못했습니다.',{cause:error}));});
     });
   }
@@ -262,6 +262,11 @@ export class CoupangChromeCollectorService {
       this.helloReceived=true;this.stored.extensionVersion=this.helloVersion;this.stored.lastConnectedAt=new Date().toISOString();this.lastError=undefined;
       void this.saveState();this.emitStatus();return;
     }
+    if(value.type==='COLLECT_PRODUCT_PROGRESS'&&typeof value.requestId==='string'){
+      const pending=this.pending.get(value.requestId);const stage=safeText(value.stage,80);
+      if(pending&&stage&&['OPENING_AFFILIATE_LINK','AFFILIATE_REDIRECT','PRODUCT_PAGE_LOADING','CONTENT_SCRIPT_WAIT','COLLECTING_PRODUCT_PAGE'].includes(stage))pending.onProgress?.(stage);
+      return;
+    }
     if(value.type!=='COLLECT_PRODUCT_RESULT'||typeof value.requestId!=='string')return;
     const pending=this.pending.get(value.requestId);if(!pending)return;
     clearTimeout(pending.timer);this.pending.delete(value.requestId);
@@ -274,14 +279,14 @@ export class CoupangChromeCollectorService {
     if(value.qualityChecked!==true)throw new CoupangChromeCollectorError('COLLECTOR_UPDATE_REQUIRED','이미지 품질 확인을 위해 Chrome 확장프로그램을 새로고침하세요.');
     const location=collectedLocation(value.finalUrl);
     if(!location||value.productId!==location.productId||value.itemId!==location.itemId||value.vendorItemId!==location.vendorItemId)throw new CoupangChromeCollectorError('PRODUCT_IDENTITY_MISMATCH','수집된 상품 식별값이 최종 쿠팡 상품 주소와 일치하지 않습니다.');
-    const imageUrls=normalizeImages(value.imageUrls);if(!imageUrls.length&&!normalizeImages(value.unknownImageUrls).length)throw new CoupangChromeCollectorError('PRODUCT_IMAGES_NOT_FOUND','상품 갤러리 이미지를 확인하지 못했습니다. 열린 Chrome 상품 페이지를 확인하세요.');
+    const imageUrls=normalizeImages(value.imageUrls);const smallImages=Array.isArray(value.smallImages)?value.smallImages.slice(0,20).flatMap((entry)=>{if(!isRecord(entry))return [];const url=normalizeImages([entry.url])[0];const width=Number(entry.width),height=Number(entry.height);return url&&Number.isInteger(width)&&Number.isInteger(height)&&width>0&&height>0&&width<=50000&&height<=50000&&Math.min(width,height)<600?[{url,width,height}]:[];}):[];if(!imageUrls.length&&!normalizeImages(value.unknownImageUrls).length&&!smallImages.length)throw new CoupangChromeCollectorError('PRODUCT_IMAGES_NOT_FOUND','상품 갤러리 이미지를 확인하지 못했습니다. 열린 Chrome 상품 페이지를 확인하세요.');
     const reviews:Array<CollectorReview>=[];
     if(Array.isArray(value.reviews))for(const entry of value.reviews.slice(0,8)){
       if(!isRecord(entry))continue;const reviewTextRaw=safeText(entry.reviewTextRaw,4000);if(!reviewTextRaw)continue;
       const optionTextRaw=safeText(entry.optionTextRaw,500);const rating=typeof entry.rating==='number'&&entry.rating>=1&&entry.rating<=5?entry.rating:undefined;
       reviews.push({reviewTextRaw,...(optionTextRaw?{optionTextRaw}:{}),...(rating?{rating}:{})});
     }
-    return {...location,productTitleRaw:safeText(value.productTitleRaw,500),imageUrls,unknownImageUrls:normalizeImages(value.unknownImageUrls),reviews,collectedAt:safeText(value.collectedAt,60)??new Date().toISOString()};
+    return {...location,productTitleRaw:safeText(value.productTitleRaw,500),imageUrls,unknownImageUrls:normalizeImages(value.unknownImageUrls),smallImages,reviews,collectedAt:safeText(value.collectedAt,60)??new Date().toISOString()};
   }
 
   private parseNaverBrandProduct(value:unknown):NaverBrandChromeCollectionResult{

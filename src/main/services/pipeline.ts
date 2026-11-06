@@ -14,8 +14,8 @@ import type { JobHandler } from './scheduler';
 import type { PublishEligibility } from './publish-eligibility';
 import { redactForUi } from './redaction';
 import { resolveAccountStyle } from './account-completeness';
-import { assertCoupangPostCompliance, composeCoupangPost, composeCoupangPublishText, coupangCreativeFromStoredBody, CoupangComplianceError } from './coupang-compliance';
-import { assertNaverBrandPostCompliance, composeNaverBrandPost, composeNaverBrandPublishText, naverBrandCreativeFromStoredBody, NaverBrandComplianceError } from './naver-brand-compliance';
+import { assertCoupangPostCompliance, composeCoupangPost, coupangCreativeFromStoredBody, CoupangComplianceError } from './coupang-compliance';
+import { assertNaverBrandPostCompliance, composeNaverBrandPost, naverBrandCreativeFromStoredBody, NaverBrandComplianceError } from './naver-brand-compliance';
 import { coupangProductIdentity, isSameCoupangProduct, normalizeCoupangImageUrl } from './coupang-link-input';
 import { youtubeFormatEnabled } from '../providers/youtube';
 import { sourceForAgent, sourceMetadataForPrompt } from './agent-context';
@@ -133,11 +133,11 @@ export class AutomationPipeline implements JobHandler {
     try{return await task();}finally{this.activePublishAccounts.delete(accountId);}
   }
 
-  async publishNow(account:Account,sourceType:SourceType):Promise<import('../../shared/domain').PipelineRunView> {
+  async publishNow(account:Account,sourceType:SourceType,publicationStyle?:'A'|'B'):Promise<import('../../shared/domain').PipelineRunView> {
     this.usage.resetRoutine();
     await this.eligibility.assertAccountReady(account.id);
     return this.runPublishExclusive(account.id,async()=>{
-      const job:JobRecord={id:`immediate:${account.id}:${randomUUID()}`,accountId:account.id,kind:'PUBLISH',status:'RUNNING',runAt:new Date().toISOString(),attempt:1,payload:{trigger:'IMMEDIATE',sourceType}};
+      const job:JobRecord={id:`immediate:${account.id}:${randomUUID()}`,accountId:account.id,kind:'PUBLISH',status:'RUNNING',runAt:new Date().toISOString(),attempt:1,payload:{trigger:'IMMEDIATE',sourceType,publicationStyle:publicationStyle??account.publicationStyle??'A'}};
       await this.publishCycle(job,account);
       const run=this.repositories.listPipelineRuns(account.id,1)[0];
       if(!run)throw new Error('즉시 발행 결과를 확인할 수 없습니다.');
@@ -376,7 +376,7 @@ export class AutomationPipeline implements JobHandler {
     const recent=this.repositories.recentContentForAgent(account.id,6,true)
       .map(({sourceType,body})=>({sourceType,body:body.slice(0,280)}));
     const customDaily=Boolean(account.writingInstructions.trim());
-    const basePrompt=`계정 설정에 맞는 한국어 Threads 일상글 한 편을 작성하라. profile.writingInstructions가 있으면 목적·형식·분량·말투를 우선하되 사실성, 금지사항, 플랫폼 제한은 지켜라. 없으면 자연스러운 입말과 분명한 핵심을 담아라.
+    const basePrompt=`계정 설정에 맞는 한국어 Threads 일상글 한 편을 작성하라. 첫 줄에 독자의 구체적인 고민, 의외의 관점 또는 실용적 이득을 명확히 담아 계속 읽고 싶게 하라. 과장, 가짜 비밀, 허위 약속은 금지한다. profile.writingInstructions가 있으면 목적·형식·분량·말투를 우선하되 사실성, 금지사항, 플랫폼 제한은 지켜라. 없으면 자연스러운 입말과 분명한 핵심을 담아라.
 첫 문장과 나머지 내용이 같은 주제로 자연스럽게 이어져야 한다. 불필요한 반복은 줄이고 recent와 지나치게 비슷한 소재나 구조는 피하라. 독자의 반응을 단정하거나 근거 없는 개인 경험·수치·대사·외부 링크를 만들지 마라.
 PASS면 content에 본문만, topic과 angle에 짧은 기록만 쓴다. sourceUrls는 빈 배열이다. 작성이 불가능할 때만 이유와 함께 REJECT하라.
 ${JSON.stringify({profile:this.profile(account),recent})}`;
@@ -707,6 +707,40 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
     }catch(error){this.consumeManualQueueAfterPublishFailure(runId);throw error;}
   }
 
+  private async createThreadSplit(account:Account,runId:string,original:string,source?:SourceCandidate):Promise<{body:string;reply:string}|undefined> {
+    const urls=[...new Set(original.match(/https?:\/\/[^\s]+/g)??[])];
+    let feedback='';
+    for(let attempt=1;attempt<=2;attempt++){
+      this.publishSignals.get(runId)?.throwIfAborted();
+      this.progress(runId,'WRITER',88,`B 스타일 본문과 첫 댓글 작성 ${attempt}/2`);
+      const result=await this.agent('writer',`승인된 원문을 Threads 본문과 첫 댓글로 나눠라. 첫 문장은 구체적인 고민이나 이득으로 관심을 끌고, 본문은 공백이 아닌 줄 기준 3~4줄 내외로 댓글의 답이 궁금하도록 작성한다. 댓글에는 실제로 도움이 되는 답을 제공한다. 거짓 경험·수치·과장·낚시는 금지한다. 원문의 사실과 의미를 유지하며 새로운 사실을 만들지 마라. 원문에 있는 광고 고지와 링크는 반드시 본문에 원문 그대로 유지하고 링크를 새로 만들지 마라. content에 JSON 문자열 {"body":"본문","reply":"첫 댓글"}만 담아 PASS하라.\n${JSON.stringify({original,profile:this.profile(account),feedback})}`,false,undefined,Boolean(account.writingInstructions.trim()),runId);
+      let parsed:{body?:unknown;reply?:unknown}|undefined;
+      try{parsed=JSON.parse(result.content??'');}catch{/* 결과 형식 재작성 */}
+      const body=typeof parsed?.body==='string'?formatThreadsPostText(parsed.body):'';
+      const reply=typeof parsed?.reply==='string'?formatThreadsPostText(parsed.reply):'';
+      const foundUrls=[...(body+'\n'+reply).match(/https?:\/\/[^\s]+/g)??[]];
+      const forbidden=(account.forbiddenExpressions??'').split(/[\n,]+/).map(value=>value.trim()).filter(Boolean).find(value=>(body+'\n'+reply).toLocaleLowerCase().includes(value.toLocaleLowerCase()));
+      let failure=result.decision!=='PASS'||result.vetoes.length?'작성 결과를 확인하지 못했습니다.'
+        :!body||!reply?'본문과 댓글이 모두 필요합니다.'
+        :body.length>POLICY.threadsTextLimit||reply.length>POLICY.threadsTextLimit?'본문 또는 댓글이 글자 제한을 초과했습니다.'
+        :forbidden?`금지 표현을 제거하세요: ${forbidden}`
+        :foundUrls.some(url=>!urls.includes(url))||urls.some(url=>!body.includes(url))?'기존 링크를 본문에 유지하고 새 링크를 추가하지 마세요.' :'';
+      if(!failure&&source?.sourceType==='COUPANG'&&source.sourceUrl){try{assertCoupangPostCompliance(body,source.sourceUrl);}catch{failure='쿠팡 고지문과 상품 링크를 본문에 유지해야 합니다.';}}
+      if(!failure&&source?.sourceType==='NAVER_BRAND_CONNECT'&&source.sourceUrl){try{assertNaverBrandPostCompliance(body,source.sourceUrl);}catch{failure='네이버 고지문과 상품 링크를 본문에 유지해야 합니다.';}}
+      const hookLines=body.split('\n').filter(line=>line.trim()&&!line.includes('※')&&!/https?:\/\//i.test(line));
+      if(!failure&&hookLines.length>6)failure='본문의 도입은 최대 6줄로 줄여 주세요.';
+      if(!failure){
+        const pair=JSON.stringify({body,reply});
+        this.progress(runId,'ORCHESTRATOR',92,'본문과 첫 댓글의 사실성·연결·후킹을 독립 검수하고 있습니다.');
+        const review=await this.agent('orchestrator',`본문과 첫 댓글을 독립 검수하라. 원문의 사실을 벗어나지 않고 사용자 말투와 금지사항을 지키며, 본문이 구체적인 관심을 만들고 댓글이 실제 답을 주는지 확인한다. 과장·허위·광고 고지 누락은 반려한다. 통과하면 content에 pair 문자열을 한 글자도 바꾸지 말고 반환하고 vetoes는 빈 배열로 둔다. 반려하면 수정 방향을 짧게 제시한다.\n${JSON.stringify({original,pair,profile:this.profile(account)})}`,false,undefined,Boolean(account.writingInstructions.trim()),runId);
+        if(review.decision==='PASS'&&!review.vetoes.length&&review.content===pair&&!review.sourceUrls.length)return {body,reply};
+        failure=`독립 검수 반려: ${review.reason}`;
+      }
+      feedback=failure;
+    }
+    return this.reject(runId,`B 스타일 본문과 댓글이 검수를 통과하지 못했습니다: ${feedback}`);
+  }
+
   private async publishCycle(job: JobRecord, account: Account, canPublish?:()=>boolean, signal?:AbortSignal): Promise<void|'STOPPED'> {
     const immediate=job.payload.trigger==='IMMEDIATE';
     const payloadSourceType=['DAILY','YOUTUBE','BLOG','COUPANG','NAVER_BRAND_CONNECT'].includes(String(job.payload.sourceType))?job.payload.sourceType as SourceType:undefined;
@@ -724,9 +758,30 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
           ? await this.generateDraft(account,undefined,run.id,false,'DAILY')
           : this.preparedManualCoupangDraft(account,run.id) ?? await this.generateDraft(account,undefined,run.id,false,scheduledMode);
       if (!draft) return signal?.aborted?'STOPPED':undefined;
+      const originalDraftBody=draft.body;
+      const isCoupang=draft.source?.sourceType==='COUPANG';const isNaver=draft.source?.sourceType==='NAVER_BRAND_CONNECT';const isAffiliateProduct=isCoupang||isNaver;
+      const affiliateUrl=isAffiliateProduct?draft.source?.sourceUrl?.trim():undefined;
+      if(isAffiliateProduct&&!affiliateUrl)throw new Error('제휴 링크가 없어 본문을 발행하지 않았습니다.');
+      if(affiliateUrl){
+        if(isCoupang)assertCoupangPostCompliance(draft.body,affiliateUrl);
+        else assertNaverBrandPostCompliance(draft.body,affiliateUrl);
+        draft.body=draft.body.trim().slice(0,-affiliateUrl.length).trimEnd();
+      }
+      const publicationStyle=immediate?(job.payload.publicationStyle==='B'?'B':'A'):(account.publicationStyle??'A');
+      let split=publicationStyle==='B'?await this.createThreadSplit(account,run.id,draft.body,isAffiliateProduct?undefined:draft.source):undefined;
+      if(publicationStyle==='B'&&!split)return signal?.aborted?'STOPPED':undefined;
+      if(split)draft.body=split.body;
+      if(affiliateUrl){
+        if(isCoupang)assertCoupangPostCompliance(`${draft.body}\n\n${affiliateUrl}`,affiliateUrl);
+        else assertNaverBrandPostCompliance(`${draft.body}\n\n${affiliateUrl}`,affiliateUrl);
+        if(/https?:\/\//i.test(split?.reply??''))throw new Error('첫 댓글에 예상하지 못한 링크가 포함되어 발행하지 않았습니다.');
+        const reply=[split?.reply?.trim(),affiliateUrl].filter(Boolean).join('\n\n');
+        if(reply.length>POLICY.threadsTextLimit)throw new Error('첫 댓글과 제휴 링크가 글자 제한을 초과하여 발행하지 않았습니다.');
+        split={body:draft.body,reply};
+      }
       preparedCoupangPublication=Boolean(draft.preparedPostId&&this.isManualCoupang(draft.source));
       const publishBody=!draft.source && account.writingInstructions.trim() ? draft.body : formatThreadsPostText(draft.body);
-      if(draft.preparedPostId&&publishBody!==draft.body)this.repositories.updateUnpublishedPostBody(draft.preparedPostId,account.id,publishBody);
+      if(draft.preparedPostId&&!isAffiliateProduct&&publishBody!==originalDraftBody)this.repositories.updateUnpublishedPostBody(draft.preparedPostId,account.id,publishBody);
       draft.body=publishBody;
       const freshAccount = this.repositories.getAccount(account.id);
       if (!freshAccount?.active || (!immediate&&!freshAccount.automationTarget)) {
@@ -736,10 +791,8 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
         return 'STOPPED';
       }
       await this.eligibility.assertAccountReady(account.id);
-      const isCoupang=draft.source?.sourceType==='COUPANG';const isNaver=draft.source?.sourceType==='NAVER_BRAND_CONNECT';const isAffiliateProduct=isCoupang||isNaver;
-      const apiPublishText=isCoupang&&draft.source?.sourceUrl?composeCoupangPublishText(draft.body,draft.source.sourceUrl)
-        :isNaver&&draft.source?.sourceUrl?composeNaverBrandPublishText(draft.body,draft.source.sourceUrl):draft.body;
-      this.progress(run.id, 'PUBLISH', 96, isAffiliateProduct?'고지문·광고 문장·상품 링크와 이미지를 하나의 제휴 상품 게시물로 발행하고 있습니다.':'최종 승인된 본문을 Threads에 발행하고 있습니다.', { draftBody:draft.body });
+      const apiPublishText=draft.body;
+      this.progress(run.id, 'PUBLISH', 96, isAffiliateProduct?'고지문과 상품 소개를 발행한 뒤 첫 댓글에 제휴 링크를 등록합니다.':'최종 승인된 본문을 Threads에 발행하고 있습니다.', { draftBody:draft.body });
       const localPostId = draft.preparedPostId ?? draft.source?.id ?? randomUUID();
       const finalAccount=this.repositories.getAccount(account.id);
       if (!immediate && (signal?.aborted || (!finalAccount?.active || !finalAccount.automationTarget) || (canPublish && !canPublish()))) {
@@ -751,7 +804,7 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
         linkUrl:isAffiliateProduct ? undefined : draft.source?.sourceUrl, imageUrl:draft.source?.imageUrl, imageUrls:draft.source?.imageUrls });
       remotePostId = published.remoteId;
       try {
-        if(draft.preparedPostId)this.repositories.markPreparedPostPublished(localPostId,account.id,published.remoteId);
+        if(draft.preparedPostId)this.repositories.markPreparedPostPublished(localPostId,account.id,published.remoteId,undefined,isAffiliateProduct?draft.body:undefined);
         else this.repositories.savePost({ id: localPostId, accountId: account.id, sourceId: draft.source?.id,
           sourceType: (draft.source?.sourceType ?? 'DAILY') as SourceType, body: draft.body, url: draft.source?.sourceUrl,
           imageUrl: draft.source?.imageUrl, imageUrls:draft.source?.imageUrls, media:draft.source?.media, threadsPostId: published.remoteId,
@@ -760,12 +813,34 @@ ${JSON.stringify({profile:this.profile(account),recent})}`;
       } catch (error) {
         throw new UncertainRemoteOperationError(`원격 게시 성공 후 로컬 저장 결과가 불확실하여 자동 재시도하지 않습니다. Threads ID: ${published.remoteId}. ${String(error)}`, { cause: error });
       }
+      let replyWarning='';
+      if(split){
+        this.repositories.recordFirstReply(localPostId,account.id,split.reply,'PENDING');
+        const current=this.repositories.getAccount(account.id);
+        if(signal?.aborted||!current?.active||(!immediate&&(!current.automationTarget||(canPublish&&!canPublish())))){
+          replyWarning='본문은 발행됐지만 중지되어 첫 댓글은 발행하지 않았습니다.';
+          this.repositories.recordFirstReply(localPostId,account.id,split.reply,'STOPPED',undefined,replyWarning);
+        }else{
+          this.progress(run.id,'PUBLISH',98,'본문 발행 완료 · 첫 댓글을 발행하고 있습니다.',{draftBody:draft.body});
+          let remoteReplyId:string|undefined;
+          try{
+            const reply=await this.threads.reply(account.id,published.remoteId,split.reply);
+            remoteReplyId=reply.remoteId;
+            this.repositories.recordFirstReply(localPostId,account.id,split.reply,'PUBLISHED',reply.remoteId);
+          }catch(error){
+            const uncertain=Boolean(remoteReplyId)||error instanceof UncertainRemoteOperationError;
+            replyWarning=uncertain?'본문은 발행됐으며 첫 댓글 결과 확인이 필요합니다. 자동 재시도하지 않습니다.':'본문은 발행됐지만 첫 댓글 발행에 실패했습니다. 자동 재시도하지 않습니다.';
+            this.repositories.recordFirstReply(localPostId,account.id,split.reply,uncertain?'UNCERTAIN':'FAILED',remoteReplyId,redactForUi(String(error)));
+            this.repositories.addLog('WARN','PUBLISH',replyWarning,undefined,account.id,run.id,'PUBLISH');
+          }
+        }
+      }
       if (draft.source) this.repositories.markSourceDone(draft.source.id, published.remoteId);
       if (this.isManualCoupang(draft.source)) this.updateManualQueue(run.id, 'COMPLETED', undefined, { activeSourceId:draft.source?.id, draftPostId:localPostId });
       this.repositories.updatePipelineRun(run.id, { status:'COMPLETED', stage:'DONE', progress:100,
-        message:isAffiliateProduct?'고지문·광고 문장·상품 링크·이미지 단일 게시물 발행을 완료했습니다.':'Threads 발행과 기록 저장을 완료했습니다.',
+        message:replyWarning||(split?'본문과 첫 댓글 발행을 완료했습니다.':isAffiliateProduct?'본문과 제휴 링크 댓글 발행을 완료했습니다.':'Threads 발행과 기록 저장을 완료했습니다.'),
         postId:localPostId, draftBody:draft.body, finishedAt:new Date().toISOString() });
-      this.repositories.addLog('INFO', 'PUBLISH', isAffiliateProduct?`${isNaver?'네이버 브랜드 커넥트':'쿠팡'} 고지문·광고 문장·상품 링크·이미지 단일 게시에 성공했습니다.`:'Threads 게시에 성공했습니다.', undefined, account.id, run.id, 'DONE');
+      this.repositories.addLog('INFO', 'PUBLISH', isAffiliateProduct?`${isNaver?'네이버 브랜드 커넥트':'쿠팡'} 본문이 발행되었습니다. 첫 댓글 상태를 확인해 주세요.`:'Threads 게시에 성공했습니다.', undefined, account.id, run.id, 'DONE');
     } catch (error) {
       if(signal?.aborted && !remotePostId && !(error instanceof UncertainRemoteOperationError)){
         try{this.updateManualQueue(run.id,'QUEUED');this.repositories.updatePipelineRun(run.id,{status:'STOPPED',stage:'DONE',progress:100,message:'자동화가 중지되어 발행하지 않았습니다.',finishedAt:new Date().toISOString()});}catch{/* 원래 중지 상태를 유지한다. */}

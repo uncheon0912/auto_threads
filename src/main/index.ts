@@ -79,6 +79,21 @@ async function createApplication(): Promise<void> {
       operationStart:'09:00', operationEnd:'21:00', weekdays:[0,1,2,3,4,5,6], commentsEnabled:true, commentIntervalMinutes:10, fixedLinkEnabled:false, fixedLinkUrl:'',
     });
     repositories.saveProviderConfig({accountId:uiAccount.id,type:'COUPANG',enabled:true,config:{schemaVersion:1,mode:'MANUAL_LINKS',keywords:'개발자 책상, 생활용품',rocketOnly:true,rocketFreshOnly:false,goldBoxOnly:false}});
+    if(process.env.THREADS_AUTO_UI_ACTION==='coupang-keyword-edit'){
+      repositories.saveProviderConfig({accountId:uiAccount.id,type:'COUPANG',enabled:true,config:{schemaVersion:1,mode:'OPEN_API',keyLabel:'UI 테스트',keywords:'저장 키워드',keywordSearchIncluded:true}});
+    }
+    if(process.env.THREADS_AUTO_UI_ACTION==='naver-progress-test')repositories.saveProviderConfig({accountId:uiAccount.id,type:'NAVER_BRAND_CONNECT',enabled:true,config:{schemaVersion:1}});
+    if(process.env.THREADS_AUTO_UI_ACTION==='background-product-work'){
+      repositories.saveProviderConfig({accountId:uiAccount.id,type:'NAVER_BRAND_CONNECT',enabled:true,config:{schemaVersion:1}});
+      repositories.saveProviderConfig({accountId:uiAccount.id,type:'COUPANG',enabled:true,config:{schemaVersion:1,mode:'OPEN_API',keyLabel:'UI 테스트',keywords:'테스트'}});
+      const item=repositories.createCoupangLink({accountId:uiAccount.id,providerType:'NAVER_BRAND_CONNECT',originalInputType:'PLAIN_LINK',affiliateUrl:'https://naver.me/test',urlFingerprint:'ui-background-product',metadataStatus:'READY',productName:'UI 진행 상품'});
+      const run=repositories.createPipelineRun({accountId:uiAccount.id,mode:'PREVIEW',message:'UI 준비 중'});
+      repositories.claimNaverBrandLink(item.id,uiAccount.id,run.id);
+      repositories.updatePipelineRun(run.id,{stage:'WRITER',progress:52,message:'UI 본문 작성 중'});
+    }
+    if(process.env.THREADS_AUTO_UI_ACTION==='small-image-review'){
+      repositories.createCoupangLink({accountId:uiAccount.id,providerType:'COUPANG',originalInputType:'PLAIN_LINK',affiliateUrl:'https://link.coupang.com/a/ui-test',urlFingerprint:'ui-small-image',metadataStatus:'FAILED',productName:'UI 이미지 검토 상품',excludedImages:[{url:'https://thumbnail.coupangcdn.com/thumbnails/remote/492x492ex/image/example.jpg',position:0,reason:'too_small',width:492,height:492}]});
+    }
     if(process.env.THREADS_AUTO_UI_ACTION==='product-management'){
       const urls=['https://example.com/one.jpg','https://example.com/two.jpg','https://example.com/three.jpg'];
       const item=repositories.createCoupangLink({accountId:uiAccount.id,originalInputType:'PLAIN_LINK',affiliateUrl:'https://example.com/product',urlFingerprint:'ui-product',metadataStatus:'READY',productName:'UI 테스트 상품',imageUrls:urls});
@@ -377,6 +392,74 @@ async function createApplication(): Promise<void> {
         await mainWindow.webContents.executeJavaScript("document.querySelector('#workspace-publish')?.scrollIntoView({block:'start'})");
         await new Promise((resolve)=>setTimeout(resolve,300));
       }
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='small-image-review') {
+      for(let attempt=0;attempt<30;attempt++){
+        if(await mainWindow.webContents.executeJavaScript(`Boolean(document.querySelector('.coupang-queue-item summary'))`))break;
+        await new Promise(resolve=>setTimeout(resolve,200));
+      }
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-queue-item summary')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,200));
+      const state=await mainWindow.webContents.executeJavaScript(`(()=>{const details=document.querySelector('.coupang-gallery details');if(details)details.open=true;const text=details?.textContent;const preview=Boolean(details?.querySelector('button[aria-label="검토 이미지 1 크게 보기"]'));const check=details?.querySelector('input[type="checkbox"]');check?.click();return {text,preview,selected:check?.checked};})()`);
+      if(!state.text?.includes('492×492')||!state.preview||!state.selected)throw new Error(`저해상도 이미지 확인 UI 실패: ${JSON.stringify(state)}`);
+      console.log('SMALL_IMAGE_REVIEW_UI_TEST=PASS');
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-gallery details')?.scrollIntoView({block:'center'})`);
+      await new Promise(resolve=>setTimeout(resolve,200));
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='naver-progress-test') {
+      for(let attempt=0;attempt<30;attempt++){
+        if(await mainWindow.webContents.executeJavaScript(`Boolean(document.querySelector('.provider-naver textarea'))`))break;
+        await new Promise(resolve=>setTimeout(resolve,200));
+      }
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('.provider-naver textarea')?.focus()`);
+      mainWindow.webContents.insertText('https://naver.me/ui-test');
+      await new Promise(resolve=>setTimeout(resolve,200));
+      await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(button=>button.textContent?.trim()==='자료 분석 후 등록')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,400));
+      const state=await mainWindow.webContents.executeJavaScript(`(()=>{const bar=document.querySelector('.product-progress-track');return {percent:bar?.getAttribute('aria-valuenow'),text:document.querySelector('.product-progress')?.textContent};})()`);
+      if(state.percent!=='12'||!state.text?.includes('상품 페이지로 이동 중'))throw new Error(`네이버 시작 진행률 검증 실패: ${JSON.stringify(state)}`);
+      console.log('NAVER_PROGRESS_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='background-product-work') {
+      for(let attempt=0;attempt<30;attempt++){
+        if(await mainWindow.webContents.executeJavaScript(`Boolean(document.querySelector('.provider-naver textarea'))`))break;
+        await new Promise(resolve=>setTimeout(resolve,200));
+      }
+      const first=await mainWindow.webContents.executeJavaScript(`(()=>{window.__uiConfirmCalls=0;window.confirm=()=>{window.__uiConfirmCalls++;return true};const field=document.querySelector('.provider-naver textarea');field?.focus();return {progress:document.querySelector('.coupang-product-title')?.textContent,caret:field?getComputedStyle(field).caretColor:'',cursor:field?getComputedStyle(field).cursor:''};})()`);
+      mainWindow.webContents.insertText('https://naver.me/temporary');
+      await new Promise(resolve=>setTimeout(resolve,200));
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('button[title="쿠팡 파트너스"]')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const switched=await mainWindow.webContents.executeJavaScript(`document.querySelector('button[title="쿠팡 파트너스"]')?.getAttribute('aria-current')`);
+      await mainWindow.webContents.executeJavaScript(`document.querySelector('button[title="네이버 브랜드 커넥트"]')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const after=await mainWindow.webContents.executeJavaScript(`({value:document.querySelector('.provider-naver textarea')?.value,confirmCalls:window.__uiConfirmCalls})`);
+      if(!first.progress?.includes('52%')||!first.cursor?.includes('text')||switched!=='page'||after.value!=='https://naver.me/temporary'||after.confirmCalls!==0)throw new Error(`백그라운드 화면 검증 실패: ${JSON.stringify({first,switched,after})}`);
+      console.log('BACKGROUND_PRODUCT_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='coupang-keyword-edit') {
+      for(let attempt=0;attempt<30;attempt++){
+        if(await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('button')].some(button=>button.textContent?.trim()==='상품 검색')`))break;
+        await new Promise(resolve=>setTimeout(resolve,200));
+      }
+      await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(button=>button.textContent?.trim()==='상품 검색')?.click()`);
+      await new Promise((resolve)=>setTimeout(resolve,300));
+      const before=await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-search-modal textarea')?.value`);
+      await mainWindow.webContents.executeJavaScript(`(()=>{const field=document.querySelector('.coupang-search-modal textarea');field?.focus();field?.setSelectionRange(field.value.length,field.value.length);})()`);
+      mainWindow.webContents.insertText(', 추가 키워드');
+      await new Promise((resolve)=>setTimeout(resolve,300));
+      const edited=await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-search-modal textarea')?.value`);
+      await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('.coupang-search-modal button')].find(button=>button.textContent?.trim()==='저장된 키워드 불러오기')?.click()`);
+      await new Promise((resolve)=>setTimeout(resolve,200));
+      const restored=await mainWindow.webContents.executeJavaScript(`document.querySelector('.coupang-search-modal textarea')?.value`);
+      if(before!=='저장 키워드'||edited!=='저장 키워드, 추가 키워드'||restored!==before)throw new Error(`쿠팡 키워드 입력 검증 실패: ${JSON.stringify({before,edited,restored})}`);
+      console.log('COUPANG_KEYWORD_EDIT_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='publication-style') {
+      const result=await mainWindow.webContents.executeJavaScript(`(()=>{const a=document.querySelector('input[name="publication-style"][value="A"]');const b=document.querySelector('input[name="publication-style"][value="B"]');if(!a||!b)return false;b.click();document.querySelector('#workspace-publish')?.scrollIntoView({block:'start'});return b.checked&&!a.checked;})()`);
+      if(!result)throw new Error('발행 스타일 선택 UI 검증에 실패했습니다.');
+      await new Promise((resolve)=>setTimeout(resolve,300));
+      console.log('PUBLICATION_STYLE_UI_TEST=PASS');
     }
     if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='collector-guide') {
       await mainWindow.webContents.executeJavaScript("document.querySelector('.extension-install-button')?.click()");
