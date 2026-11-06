@@ -247,7 +247,7 @@ export function registerIpc(deps: Dependencies): void {
   });
   handle('accounts:register-threads', threadsRegistrationSchema, ({ accessToken }) => threadsAccounts.register(accessToken));
   handle('writing-prompts:get', z.string().uuid(), (id) => writingPrompts.get(promptAccount(id)));
-  handle('writing-prompts:save', z.object({accountId:z.string().uuid(),common:z.string().max(12000),account:z.string().max(12000),reference:z.string().max(12000),promotion:z.string().max(12000)}), (input) => {writingPrompts.save(promptAccount(input.accountId),input);return true;});
+  handle('writing-prompts:save', z.object({accountId:z.string().uuid(),common:z.string().max(12000),account:z.string().max(12000),reference:z.string().max(12000),promotion:z.string().max(12000),excludeCommon:z.boolean()}), (input) => {writingPrompts.save(promptAccount(input.accountId),input);return true;});
   handle('accounts:update-threads-token', threadsTokenUpdateSchema, ({ accountId, accessToken }) => threadsAccounts.updateToken(accountId, accessToken));
   handle('accounts:verify-threads', z.string().uuid(), (accountId) => threadsAccounts.verifyStoredToken(accountId));
   handle('accounts:threads-token-status', z.string().uuid(), (accountId) => threadsAccounts.tokenStatus(accountId));

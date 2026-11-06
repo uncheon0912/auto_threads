@@ -79,6 +79,7 @@ async function createApplication(): Promise<void> {
       dailyEnabled:true, promotionEnabled:false, automationTarget:false, active:true, dailyRatio:3, promotionRatio:1, dailyPostTarget:1,
       operationStart:'09:00', operationEnd:'21:00', weekdays:[0,1,2,3,4,5,6], commentsEnabled:true, commentIntervalMinutes:10, fixedLinkEnabled:false, fixedLinkUrl:'',
     });
+    if(process.env.THREADS_AUTO_UI_ACTION==='account-colors')repositories.saveAccount({name:'UI 계정 2',threadsHandle:'',topic:'',personality:'[표준]',tone:'[표준]',audience:'',writingInstructions:'',forbiddenTopics:'',forbiddenExpressions:'',dailyEnabled:true,promotionEnabled:false,automationTarget:false,active:true,dailyRatio:3,promotionRatio:1,dailyPostTarget:1,operationStart:'09:00',operationEnd:'21:00',weekdays:[0,1,2,3,4,5,6],commentsEnabled:true,commentIntervalMinutes:10,fixedLinkEnabled:false,fixedLinkUrl:''});
     repositories.saveProviderConfig({accountId:uiAccount.id,type:'COUPANG',enabled:true,config:{schemaVersion:1,mode:'MANUAL_LINKS',keywords:'개발자 책상, 생활용품',rocketOnly:true,rocketFreshOnly:false,goldBoxOnly:false}});
     if(process.env.THREADS_AUTO_UI_ACTION==='coupang-keyword-edit'){
       repositories.saveProviderConfig({accountId:uiAccount.id,type:'COUPANG',enabled:true,config:{schemaVersion:1,mode:'OPEN_API',keyLabel:'UI 테스트',keywords:'저장 키워드',keywordSearchIncluded:true}});
@@ -483,6 +484,34 @@ async function createApplication(): Promise<void> {
       })()`);
       if(!result)throw new Error('계정별 프롬프트 화면 저장 검증에 실패했습니다.');
       console.log('WRITING_PROMPTS_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='account-controls') {
+      await new Promise(resolve=>setTimeout(resolve,600));
+      const result=await mainWindow.webContents.executeJavaScript(`(async()=>{
+        const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+        [...document.querySelectorAll('button')].find(button=>button.textContent?.trim()==='운영정보')?.click();await wait(400);
+        const interval=document.querySelector('#account-comment-interval');
+        const hasTwenty=[...(interval?.options??[])].some(option=>option.value==='20');
+        const box=[...document.querySelectorAll('.modal label')].find(label=>label.textContent.includes('이 계정은 공통 프롬프트 적용 안 함'))?.querySelector('input');
+        if(!box||!hasTwenty)return {hasTwenty,box:!!box};box.click();
+        document.querySelector('.modal button.primary')?.click();await wait(600);
+        const snapshot=await window.threadsAuto.snapshot();const stored=await window.threadsAuto.writingPrompts.get(snapshot.accounts[0].id);
+        const detail=document.querySelector('.account-settings-card');if(!detail?.open)detail?.querySelector('summary')?.click();await wait(200);
+        const buttons=[...detail.querySelectorAll('.account-settings-save')];
+        const before=buttons.length===2&&buttons.every(button=>button.classList.contains('saved'));
+        const check=detail.querySelector('.type-selector input');check?.click();await wait(100);
+        const pending=buttons.every(button=>button.classList.contains('pending'));
+        buttons[0]?.click();await wait(2500);
+        return {hasTwenty,excluded:stored.excludeCommon,before,pending,saved:buttons.every(button=>button.classList.contains('saved')),message:detail.querySelector('.notice')?.textContent};
+      })()`);
+      if(!result.hasTwenty||!result.excluded||!result.before||!result.pending||!result.saved)throw new Error(`계정 설정 UI 검증 실패: ${JSON.stringify(result)}`);
+      console.log('ACCOUNT_CONTROLS_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='account-colors') {
+      await new Promise(resolve=>setTimeout(resolve,600));
+      const colors=await mainWindow.webContents.executeJavaScript(`(()=>{const cards=[...document.querySelectorAll('.account-grid .account-card')];if(cards.length<2)return [];cards.forEach(card=>card.classList.remove('selected-account'));const normal=parseFloat(getComputedStyle(cards[0]).borderTopWidth);cards[0].classList.add('selected-account');const left=getComputedStyle(cards[0]).borderTopColor;cards[0].classList.remove('selected-account');cards[1].classList.add('selected-account');return [left,getComputedStyle(cards[1]).borderTopColor,parseFloat(getComputedStyle(cards[1]).borderTopWidth),normal];})()`);
+      if(colors[0]!=='rgb(54, 184, 255)'||colors[1]!=='rgb(83, 229, 164)'||colors[2]<=colors[3])throw new Error(`계정 테두리 UI 검증 실패: ${JSON.stringify(colors)}`);
+      console.log('ACCOUNT_COLORS_UI_TEST=PASS');
     }
     if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='collector-guide') {
       await mainWindow.webContents.executeJavaScript("document.querySelector('.extension-install-button')?.click()");

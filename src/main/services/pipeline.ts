@@ -174,7 +174,7 @@ export class AutomationPipeline implements JobHandler {
   private profile(account: Account, mode: 'DAILY' | 'PROMOTION' = 'DAILY') {
     const style = resolveAccountStyle(account);
     const prompts=this.writingPrompts?.get(account);
-    return { topic: mode === 'DAILY' ? account.topic : undefined, ...(mode === 'DAILY' ? {writingInstructions:account.writingInstructions} : prompts?{promotionWritingInstructions:prompts.promotion}:{}), ...(prompts?{commonWritingInstructions:prompts.common,accountWritingInstructions:prompts.account,accountStyleExamples:prompts.reference}:{}), personality: style.personality, tone: style.tone, audience: account.audience,
+    return { topic: mode === 'DAILY' ? account.topic : undefined, ...(mode === 'DAILY' ? {writingInstructions:account.writingInstructions} : prompts?{promotionWritingInstructions:prompts.promotion}:{}), ...(prompts?{commonWritingInstructions:prompts.excludeCommon?'':prompts.common,accountWritingInstructions:prompts.account,accountStyleExamples:prompts.reference}:{}), personality: style.personality, tone: style.tone, audience: account.audience,
       forbiddenTopics: account.forbiddenTopics, forbiddenExpressions: account.forbiddenExpressions };
   }
 
