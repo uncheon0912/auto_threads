@@ -23,6 +23,10 @@ const api = {
     save: (input: AccountSaveInput) => ipcRenderer.invoke('accounts:save', input),
     delete: (id: string) => ipcRenderer.invoke('accounts:delete', id),
   },
+  writingPrompts: {
+    get: (accountId:string) => ipcRenderer.invoke('writing-prompts:get',accountId) as Promise<{common:string;account:string;reference:string;promotion:string}>,
+    save: (input:{accountId:string;common:string;account:string;reference:string;promotion:string}) => ipcRenderer.invoke('writing-prompts:save',input) as Promise<boolean>,
+  },
   providers: {
     list: (accountId: string) => ipcRenderer.invoke('providers:list', accountId),
     save: (input: Omit<ProviderConfig, 'id'> & { id?: string }) => ipcRenderer.invoke('providers:save', input),

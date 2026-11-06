@@ -28,6 +28,7 @@ import { runYouTubePreview } from './services/youtube-preview-runner';
 import { loadMainRenderer } from './services/main-window-loader';
 import { enforceStoppedAutomationOnStartup } from './services/startup-automation';
 import { projectDataDirectory, projectStorageRoot } from './services/storage-paths';
+import { LocalWritingPrompts } from './services/2026-11-06-local-writing-prompts';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -130,7 +131,7 @@ async function createApplication(): Promise<void> {
   const threads = new MetaThreadsProvider(credentials, fetch, Date.now, (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const threadsAccounts = new ThreadsAccountService(repositories,credentials,threads);
   const coupang = new CoupangPartnersProvider(credentials);
-  const pipeline = new AutomationPipeline(repositories, settings, codex, usage, registry, threads, coupang, eligibility);
+  const pipeline = new AutomationPipeline(repositories, settings, codex, usage, registry, threads, coupang, eligibility, new LocalWritingPrompts(userData));
   const scheduler = new AutomationScheduler(repositories, pipeline, eligibility);
   const resumeScheduler=()=>scheduler.resumeAfterSystemWake();
   powerMonitor.on('resume',resumeScheduler);
@@ -460,6 +461,28 @@ async function createApplication(): Promise<void> {
       if(!result)throw new Error('발행 스타일 선택 UI 검증에 실패했습니다.');
       await new Promise((resolve)=>setTimeout(resolve,300));
       console.log('PUBLICATION_STYLE_UI_TEST=PASS');
+    }
+    if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='writing-prompts') {
+      await new Promise(resolve=>setTimeout(resolve,500));
+      await mainWindow.webContents.executeJavaScript(`[...document.querySelectorAll('button')].find(button=>button.textContent?.trim()==='운영정보')?.click()`);
+      await new Promise(resolve=>setTimeout(resolve,500));
+      const result=await mainWindow.webContents.executeJavaScript(`(async()=>{
+        const daily=[...document.querySelectorAll('.modal label.field')].find(element=>element.querySelector('span')?.textContent==='일상글 전용 프롬프트')?.querySelector('textarea');
+        if(!daily||daily.value!==''||!daily.placeholder.includes('자영업자'))return false;
+        const labels=['모든 계정 공통 프롬프트','이 계정의 프롬프트','이 계정의 참고 글 스타일','홍보글 전용 프롬프트'];
+        const fields=labels.map(label=>[...document.querySelectorAll('.modal label.field')].find(element=>element.querySelector('span')?.textContent===label)?.querySelector('textarea'));
+        if(fields.some(field=>!field||field.disabled))return false;
+        const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+        fields.forEach((field,index)=>{setter.call(field,'검증 '+index);field.dispatchEvent(new Event('input',{bubbles:true}));});
+        await new Promise(resolve=>setTimeout(resolve,100));
+        document.querySelector('.modal button.primary')?.click();
+        await new Promise(resolve=>setTimeout(resolve,500));
+        const snapshot=await window.threadsAuto.snapshot();
+        const stored=await window.threadsAuto.writingPrompts.get(snapshot.accounts[0].id);
+        return stored.common==='검증 0'&&stored.account==='검증 1'&&stored.reference==='검증 2'&&stored.promotion==='검증 3';
+      })()`);
+      if(!result)throw new Error('계정별 프롬프트 화면 저장 검증에 실패했습니다.');
+      console.log('WRITING_PROMPTS_UI_TEST=PASS');
     }
     if (safeUiTestMode && process.env.THREADS_AUTO_UI_ACTION==='collector-guide') {
       await mainWindow.webContents.executeJavaScript("document.querySelector('.extension-install-button')?.click()");

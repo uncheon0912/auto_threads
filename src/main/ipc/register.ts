@@ -2,6 +2,7 @@ import { app, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from
 import { z } from 'zod';
 import path from 'node:path';
 import { prepareExtensionInstallation } from '../services/extension-installation';
+import { LocalWritingPrompts } from '../services/2026-11-06-local-writing-prompts';
 import type { CoupangProductQueueItem, CoupangProviderConfig, CredentialKey, SourceCandidate, SourceType } from '../../shared/domain';
 import { COUPANG_CATEGORY_OPTIONS } from '../../shared/coupang-catalog';
 import { POLICY } from '../../shared/policy';
@@ -48,6 +49,8 @@ function trusted(event: IpcMainInvokeEvent, window: BrowserWindow): void {
 }
 
 export function registerIpc(deps: Dependencies): void {
+  const writingPrompts=new LocalWritingPrompts(app.getPath('userData'));
+  const promptAccount=(id:string)=>{const account=deps.repositories.getAccount(id);if(!account)throw new Error('계정을 찾을 수 없습니다.');return account;};
   const candidateCache = new Map<string, SourceCandidate[]>();
   const coupangProductCache = new Map<string, SourceCandidate[]>();
   const threadsAccounts = deps.threadsAccounts;
@@ -243,6 +246,8 @@ export function registerIpc(deps: Dependencies): void {
     }, accountRuntime };
   });
   handle('accounts:register-threads', threadsRegistrationSchema, ({ accessToken }) => threadsAccounts.register(accessToken));
+  handle('writing-prompts:get', z.string().uuid(), (id) => writingPrompts.get(promptAccount(id)));
+  handle('writing-prompts:save', z.object({accountId:z.string().uuid(),common:z.string().max(12000),account:z.string().max(12000),reference:z.string().max(12000),promotion:z.string().max(12000)}), (input) => {writingPrompts.save(promptAccount(input.accountId),input);return true;});
   handle('accounts:update-threads-token', threadsTokenUpdateSchema, ({ accountId, accessToken }) => threadsAccounts.updateToken(accountId, accessToken));
   handle('accounts:verify-threads', z.string().uuid(), (accountId) => threadsAccounts.verifyStoredToken(accountId));
   handle('accounts:threads-token-status', z.string().uuid(), (accountId) => threadsAccounts.tokenStatus(accountId));
