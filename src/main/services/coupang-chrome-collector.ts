@@ -169,13 +169,27 @@ export class CoupangChromeCollectorService {
   onStatus(listener:(status:CoupangCollectorStatus)=>void):()=>void{this.statusListeners.add(listener);return()=>this.statusListeners.delete(listener);}
 
   research(input:{sourceUrl:string;maxImages?:number;maxReviews?:number}):Promise<CoupangChromeCollectionResult>{
-    const run=this.tail.then(()=>this.collectOnce(input,'COUPANG'),()=>this.collectOnce(input,'COUPANG'));
+    const run=this.tail.then(()=>this.collectWithRetry(input,'COUPANG'),()=>this.collectWithRetry(input,'COUPANG'));
     this.tail=run.then(()=>undefined,()=>undefined);return run;
   }
 
   researchNaverBrand(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},onProgress?:(stage:string)=>void):Promise<NaverBrandChromeCollectionResult>{
-    const run=this.tail.then(()=>this.collectOnce(input,'NAVER_BRAND_CONNECT',onProgress),()=>this.collectOnce(input,'NAVER_BRAND_CONNECT',onProgress));
+    const run=this.tail.then(()=>this.collectWithRetry(input,'NAVER_BRAND_CONNECT',onProgress),()=>this.collectWithRetry(input,'NAVER_BRAND_CONNECT',onProgress));
     this.tail=run.then(()=>undefined,()=>undefined);return run;
+  }
+
+  private async collectWithRetry(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'COUPANG'):Promise<CoupangChromeCollectionResult>;
+  private async collectWithRetry(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'NAVER_BRAND_CONNECT',onProgress?:(stage:string)=>void):Promise<NaverBrandChromeCollectionResult>;
+  private async collectWithRetry(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'COUPANG'|'NAVER_BRAND_CONNECT',onProgress?:(stage:string)=>void):Promise<CoupangChromeCollectionResult|NaverBrandChromeCollectionResult>{
+    for(let attempt=0;attempt<3;attempt++){
+      try{return provider==='COUPANG'?await this.collectOnce(input,'COUPANG'):await this.collectOnce(input,'NAVER_BRAND_CONNECT',onProgress);}
+      catch(error){
+        if(!(error instanceof CoupangChromeCollectorError)||!['COLLECTOR_RECONNECTED','COLLECTOR_DISCONNECTED','COLLECTOR_NOT_CONNECTED','NATIVE_HOST_WRITE_FAILED','COLLECTOR_BUSY'].includes(error.code)||attempt===2)throw error;
+        await new Promise(resolve=>setTimeout(resolve,2000));
+        if(!this.server)throw new CoupangChromeCollectorError('COLLECTOR_STOPPED','프로그램이 종료되어 상품 수집을 중단했습니다.');
+      }
+    }
+    throw new Error('상품 수집을 완료하지 못했습니다.');
   }
 
   private async collectOnce(input:{sourceUrl:string;maxImages?:number;maxReviews?:number},provider:'COUPANG'):Promise<CoupangChromeCollectionResult>;
@@ -184,8 +198,8 @@ export class CoupangChromeCollectorService {
     const sourceUrl=typeof input.sourceUrl==='string'?input.sourceUrl.trim():'';
     const valid=provider==='COUPANG'?isCoupangAffiliateUrl(sourceUrl):isNaverBrandAffiliateUrl(sourceUrl);
     if(!sourceUrl||sourceUrl.length>2_000||!valid)throw new CoupangChromeCollectorError('INVALID_PRODUCT_LINK',provider==='COUPANG'?'쿠팡 파트너스 상품 링크가 올바르지 않습니다.':'네이버 브랜드 커넥트에서 발급한 naver.me 상품 링크가 올바르지 않습니다.');
-    if(provider==='NAVER_BRAND_CONNECT'&&!this.helloSupportsNaverBrand)throw new CoupangChromeCollectorError('COLLECTOR_UPDATE_REQUIRED','네이버 브랜드 커넥트 수집을 지원하는 최신 Chrome 확장 프로그램으로 새로고침하세요.');
     if(!this.socket||this.socket.destroyed||!this.helloReceived)throw new CoupangChromeCollectorError('COLLECTOR_NOT_CONNECTED','Chrome 상품 수집기가 연결되지 않았습니다. 계정 관리에서 확장 프로그램 상태를 확인하세요.');
+    if(provider==='NAVER_BRAND_CONNECT'&&!this.helloSupportsNaverBrand)throw new CoupangChromeCollectorError('COLLECTOR_UPDATE_REQUIRED','네이버 브랜드 커넥트 수집을 지원하는 최신 Chrome 확장 프로그램으로 새로고침하세요.');
     const requestId=randomUUID();
     const request={type:'COLLECT_PRODUCT',protocolVersion:COUPANG_COLLECTOR_PROTOCOL_VERSION,requestId,provider,
       sourceUrl,maxImages:Math.max(1,Math.min(20,Math.trunc(input.maxImages??20))),
@@ -220,15 +234,17 @@ export class CoupangChromeCollectorService {
         socket.setTimeout(15_000,()=>socket.destroy());
         socket.once('close',()=>this.awaitingSockets.delete(socket));
         socket.once('error',()=>socket.destroy());
-        socket.once('data',chunk=>{this.awaitingSockets.delete(socket);socket.setTimeout(0);this.accept(socket);this.consume(String(chunk));});
+        socket.once('data',chunk=>{this.awaitingSockets.delete(socket);socket.setTimeout(0);if(this.accept(socket))this.consume(String(chunk));});
       });
       server.once('error',reject);server.listen(pipePath,()=>{server.off('error',reject);this.server=server;resolve();});
     });
     if(process.platform!=='win32')await fs.chmod(pipePath,0o600);
   }
 
-  private accept(socket:net.Socket):void{
+  private accept(socket:net.Socket):boolean{
     if(this.socket&&this.socket!==socket&&!this.socket.destroyed){
+      // 현재 요청이 끝나기 전 새 연결이 기존 수집을 강제로 끊지 않도록 한다.
+      if(this.pending.size>0){socket.destroy();return false;}
       this.rejectAll(new CoupangChromeCollectorError('COLLECTOR_RECONNECTED','Chrome 쿠팡 수집기 연결이 다시 설정되어 진행 중인 상품 수집을 중단했습니다. 다시 시도하세요.'));
       this.socket.destroy();
     }
@@ -236,6 +252,7 @@ export class CoupangChromeCollectorService {
     socket.setEncoding('utf8');socket.on('data',chunk=>this.consume(String(chunk)));
     socket.on('error',error=>{this.lastError=`Chrome 수집기 통신 오류: ${error.message}`;this.emitStatus();});
     socket.on('close',()=>{if(this.socket===socket){this.socket=undefined;this.helloReceived=false;this.helloVersion=undefined;this.helloSupportsAffiliateUrl=false;this.helloSupportsNaverBrand=false;this.rejectAll(new CoupangChromeCollectorError('COLLECTOR_DISCONNECTED','Chrome 상품 수집기 연결이 끊어졌습니다.'));this.emitStatus();}});
+    return true;
   }
 
   private consume(chunk:string):void{
